@@ -1,0 +1,51 @@
+# Maintainer: neovim.harness contributors
+pkgname=neovim.harness
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Edit Wayland clipboard text in Neovide and copy plain text or formatted HTML back'
+arch=('any')
+license=('MIT')
+depends=(
+  python
+  python-lxml
+  python-premailer
+  python-cssutils
+  pandoc-cli
+  wl-clipboard
+  neovide
+)
+makedepends=(
+  python-build
+  python-installer
+  python-setuptools
+  python-wheel
+  python-pytest
+  python-pytest-cov
+)
+install=neovim.harness.install
+
+build() {
+  cd "$startdir/../.."
+  python -m build --wheel --outdir "$srcdir"
+}
+
+check() {
+  cd "$startdir/../.."
+  pytest tests/environment --tb=no -q
+  pytest tests/unit --cov=neovim_harness --cov-report=term-missing --cov-fail-under=90
+}
+
+package() {
+  cd "$startdir/../.."
+  python -m installer --destdir="$pkgdir" \
+    "$srcdir/neovim_harness-${pkgver}-py3-none-any.whl"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 share/applications/neovim.harness.new-plain.desktop \
+    "$pkgdir/usr/share/applications/neovim.harness.new-plain.desktop"
+  install -Dm644 share/applications/neovim.harness.edit-plain.desktop \
+    "$pkgdir/usr/share/applications/neovim.harness.edit-plain.desktop"
+  install -Dm644 share/applications/neovim.harness.new-formatted.desktop \
+    "$pkgdir/usr/share/applications/neovim.harness.new-formatted.desktop"
+  install -Dm644 share/applications/neovim.harness.edit-formatted.desktop \
+    "$pkgdir/usr/share/applications/neovim.harness.edit-formatted.desktop"
+}

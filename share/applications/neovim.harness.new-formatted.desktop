@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Neovim Harness: New Formatted Text
+GenericName=Neovim clipboard editor
+Comment=Copies formatted HTML to the clipboard after exit.
+Exec=neovim.harness -n
+Icon=neovide
+Terminal=false
+StartupNotify=false
+Categories=Utility;TextEditor;
+Keywords=neovim;clipboard;markdown;html;formatted;
+X-KDE-GlobalAccel-CommandShortcut=true

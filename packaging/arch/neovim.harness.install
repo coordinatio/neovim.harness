@@ -1,0 +1,38 @@
+# A failing check prints what to fix. Pacman does not roll back the package.
+
+# sudo clears WAYLAND_DISPLAY. Restore it from the invoking user's socket.
+_export_sudo_wayland_display() {
+  if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    return 0
+  fi
+  if [ -z "${SUDO_USER:-}" ] || [ "$SUDO_USER" = root ]; then
+    return 0
+  fi
+  _uid=$(id -u "$SUDO_USER" 2>/dev/null) || return 0
+  _runtime=/run/user/$_uid
+  if [ ! -d "$_runtime" ]; then
+    return 0
+  fi
+  for _candidate in "$_runtime"/wayland-*; do
+    if [ ! -S "$_candidate" ]; then
+      continue
+    fi
+    case "$_candidate" in
+      *.lock) continue ;;
+    esac
+    WAYLAND_DISPLAY=${_candidate##*/}
+    export WAYLAND_DISPLAY
+    return 0
+  done
+  return 0
+}
+
+post_install() {
+  _export_sudo_wayland_display
+  neovim.harness --check-environment
+}
+
+post_upgrade() {
+  _export_sudo_wayland_display
+  neovim.harness --check-environment
+}
