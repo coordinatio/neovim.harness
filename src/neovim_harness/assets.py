@@ -1,4 +1,4 @@
-"""Resolve package-data paths that Pandoc can open."""
+"""Resolve package-data paths that Pandoc and Neovide can open."""
 
 from __future__ import annotations
 
@@ -11,10 +11,14 @@ class AssetPaths:
         self,
         lua_filter: Path,
         stylesheet: Path,
+        rename_lua: Path,
+        resume_lua: Path,
         _open_resources: list[object],
     ) -> None:
         self.lua_filter = lua_filter
         self.stylesheet = stylesheet
+        self.rename_lua = rename_lua
+        self.resume_lua = resume_lua
         self._open_resources = _open_resources
 
     @classmethod
@@ -23,6 +27,8 @@ class AssetPaths:
         return cls(
             _as_path("backics.lua", open_resources),
             _as_path("github-pandoc.css", open_resources),
+            _as_path("rename.lua", open_resources),
+            _as_path("resume.lua", open_resources),
             open_resources,
         )
 

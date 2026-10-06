@@ -5,6 +5,8 @@ import pytest
 from neovim_harness.environment import (
     check_assets,
     check_cssutils,
+    check_git,
+    check_kdialog,
     check_lxml,
     check_neovide,
     check_pandoc,
@@ -26,6 +28,14 @@ def test_neovide_on_path() -> None:
 
 def test_pandoc_on_path() -> None:
     _require(check_pandoc())
+
+
+def test_git_on_path() -> None:
+    _require(check_git())
+
+
+def test_kdialog_on_path() -> None:
+    _require(check_kdialog())
 
 
 def test_wayland_clipboard() -> None:

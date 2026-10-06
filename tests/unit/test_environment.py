@@ -10,6 +10,8 @@ from neovim_harness.environment import (
     RequirementFailure,
     check_assets,
     check_cssutils,
+    check_git,
+    check_kdialog,
     check_lxml,
     check_neovide,
     check_pandoc,
@@ -22,6 +24,8 @@ from neovim_harness.environment import (
 
 _NEOVIDE = "The neovide command is not on PATH.\nInstall the neovide package."
 _PANDOC = "The pandoc command is not on PATH.\nInstall the pandoc-cli package."
+_GIT = "The git command is not on PATH.\nInstall the git package."
+_KDIALOG = "The kdialog command is not on PATH.\nInstall the kdialog package."
 _WL_COPY = "The wl-copy command is not on PATH.\nInstall the wl-clipboard package."
 _WL_PASTE = "The wl-paste command is not on PATH.\nInstall the wl-clipboard package."
 _WL_BOTH = (
@@ -39,7 +43,7 @@ _CSSUTILS = (
 )
 _WAYLAND = "WAYLAND_DISPLAY is not set.\nRun this install from a Wayland session."
 _ASSETS = (
-    "The lua filter and the stylesheet could not be read.\n"
+    "The lua filter, the stylesheet, and the editor scripts could not be read.\n"
     "Reinstall neovim.harness."
 )
 
@@ -71,6 +75,16 @@ def test_pandoc_message(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("neovim_harness.environment.shutil.which", lambda command: None)
     failure = check_pandoc()
     assert failure == RequirementFailure("pandoc", _PANDOC)
+
+
+def test_git_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("neovim_harness.environment.shutil.which", lambda command: None)
+    assert check_git() == RequirementFailure("git", _GIT)
+
+
+def test_kdialog_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("neovim_harness.environment.shutil.which", lambda command: None)
+    assert check_kdialog() == RequirementFailure("kdialog", _KDIALOG)
 
 
 @pytest.mark.parametrize(
@@ -130,6 +144,8 @@ def test_assets_message_when_unreadable(
     class Paths:
         lua_filter = tmp_path / "missing.lua"
         stylesheet = css
+        rename_lua = css
+        resume_lua = css
 
     monkeypatch.setattr(
         "neovim_harness.environment.AssetPaths.load",
@@ -179,6 +195,8 @@ def test_report_lists_every_missing_requirement_in_table_order(
     assert [failure.title for failure in failures] == [
         "neovide",
         "pandoc",
+        "git",
+        "kdialog",
         "Wayland clipboard",
         "lxml",
         "premailer",
@@ -189,6 +207,8 @@ def test_report_lists_every_missing_requirement_in_table_order(
     assert [failure.paragraph for failure in failures] == [
         _NEOVIDE,
         _PANDOC,
+        _GIT,
+        _KDIALOG,
         _WL_BOTH,
         _LXML,
         _PREMAILER,
@@ -223,6 +243,8 @@ def test_collect_failures_is_empty_when_requirements_are_met(
     class Paths:
         lua_filter = lua
         stylesheet = css
+        rename_lua = lua
+        resume_lua = lua
 
     monkeypatch.setattr(
         "neovim_harness.environment.AssetPaths.load",

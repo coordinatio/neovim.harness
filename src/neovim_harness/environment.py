@@ -24,6 +24,8 @@ def collect_failures() -> list[RequirementFailure]:
     checks = (
         check_neovide,
         check_pandoc,
+        check_git,
+        check_kdialog,
         check_wayland_clipboard,
         check_lxml,
         check_premailer,
@@ -68,6 +70,24 @@ def check_pandoc() -> RequirementFailure | None:
         return RequirementFailure(
             "pandoc",
             "The pandoc command is not on PATH.\nInstall the pandoc-cli package.",
+        )
+    return None
+
+
+def check_git() -> RequirementFailure | None:
+    if shutil.which("git") is None:
+        return RequirementFailure(
+            "git",
+            "The git command is not on PATH.\nInstall the git package.",
+        )
+    return None
+
+
+def check_kdialog() -> RequirementFailure | None:
+    if shutil.which("kdialog") is None:
+        return RequirementFailure(
+            "kdialog",
+            "The kdialog command is not on PATH.\nInstall the kdialog package.",
         )
     return None
 
@@ -126,13 +146,19 @@ def check_wayland_session() -> RequirementFailure | None:
 def check_assets() -> RequirementFailure | None:
     try:
         assets = AssetPaths.load()
-        if _readable(assets.lua_filter) and _readable(assets.stylesheet):
+        readable = (
+            _readable(assets.lua_filter)
+            and _readable(assets.stylesheet)
+            and _readable(assets.rename_lua)
+            and _readable(assets.resume_lua)
+        )
+        if readable:
             return None
     except Exception:
         pass
     return RequirementFailure(
         "Assets",
-        "The lua filter and the stylesheet could not be read.\n"
+        "The lua filter, the stylesheet, and the editor scripts could not be read.\n"
         "Reinstall neovim.harness.",
     )
 

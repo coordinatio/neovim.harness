@@ -30,6 +30,18 @@ _DESKTOPS = {
         "Keywords": "neovim;clipboard;markdown;html;formatted;paste;",
         "Comment": "Copies formatted HTML to the clipboard after exit.",
     },
+    "neovim.harness.new-session.desktop": {
+        "Name": "Neovim Harness: New Session",
+        "Exec": "neovim.harness -s",
+        "Keywords": "neovim;session;git;",
+        "Comment": "Starts a named session in its own git repository.",
+    },
+    "neovim.harness.resume-session.desktop": {
+        "Name": "Neovim Harness: Resume Session",
+        "Exec": "neovim.harness -r",
+        "Keywords": "neovim;session;resume;",
+        "Comment": "Opens a previous session.",
+    },
 }
 
 
@@ -71,7 +83,7 @@ def test_desktop_files_have_the_launcher_keys() -> None:
 def test_pkgbuild_matches_the_package_contract() -> None:
     text = (ROOT / "packaging" / "arch" / "PKGBUILD").read_text(encoding="utf-8")
     assert "pkgname=neovim.harness" in text
-    assert "pkgver=0.1.0" in text
+    assert "pkgver=0.2.0" in text
     assert "pkgrel=1" in text
     assert "arch=('any')" in text
     assert "license=('MIT')" in text
@@ -84,6 +96,8 @@ def test_pkgbuild_matches_the_package_contract() -> None:
         "pandoc-cli",
         "wl-clipboard",
         "neovide",
+        "git",
+        "kdialog",
     ]
     assert _bash_array(text, "makedepends") == [
         "python-build",

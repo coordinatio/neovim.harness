@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Neovim Harness: Resume Session
+GenericName=Neovim clipboard editor
+Comment=Opens a previous session.
+Exec=neovim.harness -r
+Icon=neovide
+Terminal=false
+StartupNotify=false
+Categories=Utility;TextEditor;
+Keywords=neovim;session;resume;
+X-KDE-GlobalAccel-CommandShortcut=true

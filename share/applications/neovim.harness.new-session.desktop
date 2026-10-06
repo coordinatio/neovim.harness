@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Neovim Harness: New Session
+GenericName=Neovim clipboard editor
+Comment=Starts a named session in its own git repository.
+Exec=neovim.harness -s
+Icon=neovide
+Terminal=false
+StartupNotify=false
+Categories=Utility;TextEditor;
+Keywords=neovim;session;git;
+X-KDE-GlobalAccel-CommandShortcut=true

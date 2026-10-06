@@ -1,8 +1,8 @@
 # Maintainer: neovim.harness contributors
 pkgname=neovim.harness
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
-pkgdesc='Edit Wayland clipboard text in Neovide and copy plain text or formatted HTML back'
+pkgdesc='Edit Wayland clipboard text in Neovide, or start and resume a named session'
 arch=('any')
 license=('MIT')
 depends=(
@@ -13,6 +13,8 @@ depends=(
   pandoc-cli
   wl-clipboard
   neovide
+  git
+  kdialog
 )
 makedepends=(
   python-build
@@ -48,4 +50,8 @@ package() {
     "$pkgdir/usr/share/applications/neovim.harness.new-formatted.desktop"
   install -Dm644 share/applications/neovim.harness.edit-formatted.desktop \
     "$pkgdir/usr/share/applications/neovim.harness.edit-formatted.desktop"
+  install -Dm644 share/applications/neovim.harness.new-session.desktop \
+    "$pkgdir/usr/share/applications/neovim.harness.new-session.desktop"
+  install -Dm644 share/applications/neovim.harness.resume-session.desktop \
+    "$pkgdir/usr/share/applications/neovim.harness.resume-session.desktop"
 }

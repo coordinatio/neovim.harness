@@ -22,7 +22,7 @@ class ConvertsMarkdownToHtml(Protocol):
 class Workflow(Protocol):
     def prepare(
         self,
-        path: Path,
+        path: Path | None,
         clipboard: Clipboard,
         html_to_markdown: ConvertsHtmlToMarkdown,
     ) -> None: ...
@@ -40,10 +40,11 @@ class Workflow(Protocol):
 class NewPlainText:
     def prepare(
         self,
-        path: Path,
+        path: Path | None,
         clipboard: Clipboard,
         html_to_markdown: ConvertsHtmlToMarkdown,
     ) -> None:
+        assert path is not None
         path.touch()
         logger.debug("Created empty file.")
 
@@ -63,10 +64,11 @@ class NewPlainText:
 class EditPlainText:
     def prepare(
         self,
-        path: Path,
+        path: Path | None,
         clipboard: Clipboard,
         html_to_markdown: ConvertsHtmlToMarkdown,
     ) -> None:
+        assert path is not None
         logger.debug("Pasting standard clipboard content...")
         path.write_bytes(clipboard.read())
 
@@ -86,10 +88,11 @@ class EditPlainText:
 class EditFormattedText:
     def prepare(
         self,
-        path: Path,
+        path: Path | None,
         clipboard: Clipboard,
         html_to_markdown: ConvertsHtmlToMarkdown,
     ) -> None:
+        assert path is not None
         logger.debug("Converting HTML clipboard to Markdown...")
         html_data = clipboard.read(mimetype="text/html")
         path.write_text(html_to_markdown.convert(html_data), encoding="utf-8")
@@ -110,10 +113,11 @@ class EditFormattedText:
 class NewFormattedText:
     def prepare(
         self,
-        path: Path,
+        path: Path | None,
         clipboard: Clipboard,
         html_to_markdown: ConvertsHtmlToMarkdown,
     ) -> None:
+        assert path is not None
         path.touch()
         logger.debug("Created empty file.")
 
@@ -128,3 +132,45 @@ class NewFormattedText:
     ) -> None:
         logger.info("Processing Markdown to Styled HTML...")
         clipboard.write(markdown_to_html.convert(content), mimetype="text/html")
+
+
+class NamedSession:
+    def prepare(
+        self,
+        path: Path | None,
+        clipboard: Clipboard,
+        html_to_markdown: ConvertsHtmlToMarkdown,
+    ) -> None:
+        return
+
+    def ex_commands(self) -> list[str]:
+        return ["+start"]
+
+    def publish(
+        self,
+        content: str,
+        clipboard: Clipboard,
+        markdown_to_html: ConvertsMarkdownToHtml,
+    ) -> None:
+        return
+
+
+class ResumeSession:
+    def prepare(
+        self,
+        path: Path | None,
+        clipboard: Clipboard,
+        html_to_markdown: ConvertsHtmlToMarkdown,
+    ) -> None:
+        return
+
+    def ex_commands(self) -> list[str]:
+        return ["+start"]
+
+    def publish(
+        self,
+        content: str,
+        clipboard: Clipboard,
+        markdown_to_html: ConvertsMarkdownToHtml,
+    ) -> None:
+        return

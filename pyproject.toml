@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neovim.harness"
-version = "0.1.0"
-description = "Edit Wayland clipboard text in Neovide and copy plain text or formatted HTML back."
+version = "0.2.0"
+description = "Edit Wayland clipboard text in Neovide, or start and resume a named session."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -23,7 +23,12 @@ dependencies = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-neovim_harness = ["data/backics.lua", "data/github-pandoc.css"]
+neovim_harness = [
+  "data/backics.lua",
+  "data/github-pandoc.css",
+  "data/rename.lua",
+  "data/resume.lua",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

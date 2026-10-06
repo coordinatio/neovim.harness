@@ -27,10 +27,26 @@ class FakeClipboard:
 class FakeEditor:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
+        self.files: list[Path | None] = []
+        self.directories: list[Path] = []
+        self.picks: list[tuple[Path, Path]] = []
 
-    def open(self, file_path: Path, ex_commands: list[str]) -> None:
+    def open(
+        self,
+        directory: Path,
+        ex_commands: list[str],
+        file_path: Path | None,
+        rename_request: Path,
+    ) -> None:
         self.commands.append(list(ex_commands))
-        file_path.write_text("from editor", encoding="utf-8")
+        self.files.append(file_path)
+        self.directories.append(directory)
+        if file_path is not None:
+            file_path.write_text("from editor", encoding="utf-8")
+
+    def pick(self, catalog_path: Path, choice_path: Path) -> int:
+        self.picks.append((catalog_path, choice_path))
+        return 0
 
 
 class FakeHtml:
@@ -63,7 +79,10 @@ def runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, object
         lambda environ, home: tmp_path,
     )
     monkeypatch.setattr("neovim_harness.clipboard.WaylandClipboard", lambda: clipboard)
-    monkeypatch.setattr("neovim_harness.editor.NeovideEditor", lambda: editor)
+    monkeypatch.setattr(
+        "neovim_harness.editor.NeovideEditor",
+        lambda *args, **kwargs: editor,
+    )
     monkeypatch.setattr("neovim_harness.convert.HtmlToMarkdown", FakeHtml)
     monkeypatch.setattr("neovim_harness.convert.MarkdownToHtml", FakeMarkdown)
     return {"clipboard": clipboard, "editor": editor, "root": tmp_path}
@@ -74,13 +93,33 @@ def test_help_lists_the_flags(capsys: pytest.CaptureFixture[str]) -> None:
         main(["-h"])
     assert caught.value.code == 0
     output = capsys.readouterr().out
-    for flag in ("-p", "-m", "-n", "--check-environment", "--verbose"):
+    assert "named session" in output
+    for flag in (
+        "-p",
+        "-m",
+        "-n",
+        "-s",
+        "--session",
+        "-r",
+        "--resume",
+        "--check-environment",
+        "--verbose",
+    ):
         assert flag in output
 
 
-def test_mode_flags_are_mutually_exclusive() -> None:
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["-p", "-m"],
+        ["-s", "-r"],
+        ["-s", "-p"],
+        ["-n", "--resume"],
+    ],
+)
+def test_mode_flags_are_mutually_exclusive(argv: list[str]) -> None:
     with pytest.raises(SystemExit) as caught:
-        main(["-p", "-m"])
+        main(argv)
     assert caught.value.code == 2
 
 
@@ -182,6 +221,106 @@ def test_verbose_flag_sets_debug_logging(
         assert capsys.readouterr().out == f"{SUCCESS_TEXT}\n"
     finally:
         logger.setLevel(logging.INFO)
+
+
+def test_named_session_does_not_use_the_clipboard(
+    runtime: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompts: list[str] = []
+    created: list[Path] = []
+
+    def ask(self: object, text: str) -> str:
+        prompts.append(text)
+        return "Fix login"
+
+    def init(self: object, directory: Path) -> None:
+        created.append(directory)
+        (directory / ".git").mkdir()
+
+    monkeypatch.setattr("neovim_harness.prompt.KDialogPrompt.ask", ask)
+    monkeypatch.setattr("neovim_harness.repository.GitRepository.init", init)
+    main(["-s"])
+    editor = runtime["editor"]
+    clipboard = runtime["clipboard"]
+    root = runtime["root"]
+    assert isinstance(editor, FakeEditor)
+    assert isinstance(clipboard, FakeClipboard)
+    assert isinstance(root, Path)
+    assert prompts[0].startswith("Name this session")
+    assert editor.commands == [["+start"]]
+    assert editor.files == [None]
+    assert clipboard.reads == []
+    assert clipboard.writes == []
+    assert len(created) == 1
+    assert created[0].parent == root
+    assert created[0].name.endswith("--Fix-login")
+    assert not any(path.suffix == ".md" for path in created[0].iterdir())
+
+
+def test_canceling_the_name_creates_nothing(
+    runtime: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "neovim_harness.prompt.KDialogPrompt.ask",
+        lambda self, text: None,
+    )
+    with pytest.raises(SystemExit) as caught:
+        main(["-s"])
+    assert caught.value.code == 0
+    root = runtime["root"]
+    editor = runtime["editor"]
+    assert isinstance(root, Path)
+    assert isinstance(editor, FakeEditor)
+    assert list(root.iterdir()) == []
+    assert editor.commands == []
+
+
+def test_resume_without_sessions_exits(
+    runtime: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    errors: list[str] = []
+    monkeypatch.setattr(
+        "neovim_harness.prompt.KDialogPrompt.error",
+        lambda self, text: errors.append(text),
+    )
+    with pytest.raises(SystemExit) as caught:
+        main(["-r"])
+    assert caught.value.code == 0
+    assert capsys.readouterr().out == "No sessions to resume.\n"
+    assert errors == ["No sessions to resume."]
+    editor = runtime["editor"]
+    assert isinstance(editor, FakeEditor)
+    assert editor.commands == []
+
+
+def test_resume_opens_the_chosen_document(runtime: dict[str, object]) -> None:
+    root = runtime["root"]
+    editor = runtime["editor"]
+    clipboard = runtime["clipboard"]
+    assert isinstance(root, Path)
+    assert isinstance(editor, FakeEditor)
+    assert isinstance(clipboard, FakeClipboard)
+    session = root / "doc-261005141803"
+    session.mkdir()
+    document = session / "doc-261005141803.md"
+    document.write_text("body\n", encoding="utf-8")
+
+    def pick(catalog_path: Path, choice_path: Path) -> int:
+        editor.picks.append((catalog_path, choice_path))
+        choice_path.write_text(str(session), encoding="utf-8")
+        return 0
+
+    editor.pick = pick
+    main(["-r"])
+    assert editor.commands == [["+start"]]
+    assert editor.files == [document]
+    assert editor.directories == [session]
+    assert clipboard.writes == []
+    assert clipboard.reads == []
 
 
 def test_module_entrypoint(

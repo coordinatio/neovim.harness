@@ -1,4 +1,4 @@
-"""Create a session, prepare it, open the editor, then publish."""
+"""Open a workspace, prepare it, run the editor, then publish."""
 
 from __future__ import annotations
 
@@ -12,7 +12,12 @@ from neovim_harness.modes import (
     ConvertsMarkdownToHtml,
     Workflow,
 )
-from neovim_harness.sessions import SessionStore
+from neovim_harness.workspace import (
+    OpensWorkspace,
+    RelocatesWorkspace,
+    Workspace,
+    discard_rename_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,25 +25,46 @@ logger = logging.getLogger(__name__)
 class App:
     def __init__(
         self,
-        sessions: SessionStore,
+        source: OpensWorkspace,
         mode: Workflow,
         clipboard: Clipboard,
         editor: Editor,
         html_to_markdown: ConvertsHtmlToMarkdown,
         markdown_to_html: ConvertsMarkdownToHtml,
+        lifecycle: RelocatesWorkspace,
     ) -> None:
-        self._sessions = sessions
+        self._source = source
         self._mode = mode
         self._clipboard = clipboard
         self._editor = editor
         self._html_to_markdown = html_to_markdown
         self._markdown_to_html = markdown_to_html
+        self._lifecycle = lifecycle
 
     def run(self) -> None:
-        path = self._sessions.create()
-        self._mode.prepare(path, self._clipboard, self._html_to_markdown)
-        self._editor.open(path, self._mode.ex_commands())
-        self._publish(path)
+        workspace = self._source.open()
+        try:
+            self._mode.prepare(workspace.file, self._clipboard, self._html_to_markdown)
+        except BaseException:
+            discard_rename_request(workspace.rename_request)
+            raise
+        while True:
+            try:
+                self._editor.open(
+                    workspace.directory,
+                    self._mode.ex_commands(),
+                    workspace.file,
+                    workspace.rename_request,
+                )
+            except BaseException:
+                discard_rename_request(workspace.rename_request)
+                raise
+            relocated = self._lifecycle.relocate(workspace)
+            if relocated is None:
+                break
+            workspace = relocated
+        if workspace.publish_clipboard and workspace.file is not None:
+            self._publish(workspace.file)
 
     def _publish(self, path: Path) -> None:
         try:

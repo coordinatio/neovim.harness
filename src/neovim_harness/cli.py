@@ -14,21 +14,29 @@ from neovim_harness.environment import SUCCESS_TEXT, collect_failures, format_re
 from neovim_harness.modes import (
     EditFormattedText,
     EditPlainText,
+    NamedSession,
     NewFormattedText,
     NewPlainText,
+    ResumeSession,
 )
+from neovim_harness.workspace import OpensWorkspace
 
 _MODES = {
     "new-plain": NewPlainText,
     "edit-plain": EditPlainText,
     "edit-formatted": EditFormattedText,
     "new-formatted": NewFormattedText,
+    "new-session": NamedSession,
+    "resume-session": ResumeSession,
 }
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Edit clipboard text in Neovide and copy the result back.",
+        description=(
+            "Edit clipboard text in Neovide and copy the result back, "
+            "or start and resume a named session."
+        ),
     )
     parser.add_argument(
         "-v",
@@ -63,6 +71,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         const="new-formatted",
         help="Edit a new formatted document",
     )
+    group.add_argument(
+        "-s",
+        "--session",
+        dest="mode",
+        action="store_const",
+        const="new-session",
+        help="Start a named session without using the clipboard",
+    )
+    group.add_argument(
+        "-r",
+        "--resume",
+        dest="mode",
+        action="store_const",
+        const="resume-session",
+        help="Resume a previous session",
+    )
     parser.set_defaults(mode="new-plain")
     return parser.parse_args(list(argv) if argv is not None else None)
 
@@ -93,15 +117,35 @@ def _run(mode_name: str) -> None:
     from neovim_harness.clipboard import WaylandClipboard
     from neovim_harness.convert import HtmlToMarkdown, MarkdownToHtml
     from neovim_harness.editor import NeovideEditor
+    from neovim_harness.prompt import KDialogPrompt
+    from neovim_harness.repository import GitRepository
     from neovim_harness.sessions import SessionStore, sessions_root
+    from neovim_harness.workspace import (
+        ClipboardSessionSource,
+        NamedSessionSource,
+        ResumeSessionSource,
+        SessionLifecycle,
+    )
 
     assets = AssetPaths.load()
+    sessions = SessionStore(sessions_root(os.environ, Path.home()))
+    editor = NeovideEditor(assets.rename_lua, assets.resume_lua)
+    dialog = KDialogPrompt()
+    git = GitRepository()
+    source: OpensWorkspace
+    if mode_name == "new-session":
+        source = NamedSessionSource(sessions, dialog, git, dialog)
+    elif mode_name == "resume-session":
+        source = ResumeSessionSource(sessions, editor, dialog)
+    else:
+        source = ClipboardSessionSource(sessions)
     app = App(
-        sessions=SessionStore(sessions_root(os.environ, Path.home())),
+        source=source,
         mode=_MODES[mode_name](),
         clipboard=WaylandClipboard(),
-        editor=NeovideEditor(),
+        editor=editor,
         html_to_markdown=HtmlToMarkdown(assets.lua_filter),
         markdown_to_html=MarkdownToHtml(assets.stylesheet),
+        lifecycle=SessionLifecycle(sessions, git, dialog),
     )
     app.run()
