@@ -17,6 +17,17 @@ logger = logging.getLogger(__name__)
 # or attach to an existing Neovim. They stay set in this process.
 _NEOVIDE_LAUNCH = frozenset({"NEOVIDE_CHDIR", "NEOVIDE_SERVER"})
 
+# Neovide's default title is the full path. The taskbar keeps the start of that
+# string, so every session looks the same. Show the session directory and, when
+# a file is open, its path inside that directory. titlelen 0 keeps the directory
+# name at the front instead of shortening a long title to its end.
+_SESSION_TITLE = (
+    "set title titlelen=0 "
+    "titlestring=%{empty(expand('%:.'))"
+    "?fnamemodify(getcwd(),':t')"
+    ":fnamemodify(getcwd(),':t').'/'.expand('%:.')}"
+)
+
 
 class Editor(Protocol):
     def open(
@@ -46,7 +57,14 @@ class NeovideEditor:
         if file_path is not None:
             command.append(str(file_path))
         command.extend(
-            ["--", *ex_commands, "-c", _lua_dofile(self._rename_lua)]
+            [
+                "--",
+                *ex_commands,
+                "-c",
+                _SESSION_TITLE,
+                "-c",
+                _lua_dofile(self._rename_lua),
+            ]
         )
         target = file_path if file_path is not None else directory
         logger.info("Opening editor: %s", target)

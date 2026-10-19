@@ -27,6 +27,15 @@ def _dofile(path: Path) -> str:
     return f"lua dofile([=[{path}]=])"
 
 
+def _session_title() -> str:
+    return (
+        "set title titlelen=0 "
+        "titlestring=%{empty(expand('%:.'))"
+        "?fnamemodify(getcwd(),':t')"
+        ":fnamemodify(getcwd(),':t').'/'.expand('%:.')}"
+    )
+
+
 def test_argv_cwd_and_detached_streams(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -55,6 +64,8 @@ def test_argv_cwd_and_detached_streams(
             "--",
             "+start",
             "+colorscheme retrobox",
+            "-c",
+            _session_title(),
             "-c",
             _dofile(rename),
         ],
@@ -91,6 +102,8 @@ def test_directory_launch_omits_the_file(
         "--no-fork",
         "--",
         "+start",
+        "-c",
+        _session_title(),
         "-c",
         _dofile(rename),
     ]
@@ -137,6 +150,8 @@ def test_no_ex_commands_still_pass_the_separator(
         "--no-fork",
         str(path),
         "--",
+        "-c",
+        _session_title(),
         "-c",
         _dofile(rename),
     ]
