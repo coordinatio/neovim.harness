@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from neovim_harness.clipboard import WaylandClipboard
+from neovim_harness.clipboard import ClipboardError, WaylandClipboard
 
 
 def test_warns_when_wl_copy_is_missing(
@@ -70,3 +70,53 @@ def test_write_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     assert html[0][0] == ["wl-copy", "-t", "text/html"]
     assert html[1]["input"] == "<p>héllo</p>".encode("utf-8")
     assert empty[0][0] == ["wl-copy"]
+
+
+def test_read_keeps_stdout_when_the_mime_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(args[0], 1, stdout=b"partial", stderr=b"missing")
+
+    monkeypatch.setattr("neovim_harness.clipboard.subprocess.run", fake_run)
+    assert WaylandClipboard().read(mimetype="text/html") == b"partial"
+
+
+def test_read_required_requests_the_mime_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        seen["command"] = args[0]
+        seen["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args[0], 0, stdout=b"<p>x</p>", stderr=b"")
+
+    monkeypatch.setattr("neovim_harness.clipboard.subprocess.run", fake_run)
+    assert WaylandClipboard().read_required("text/html") == b"<p>x</p>"
+    assert seen["command"] == ["wl-paste", "--no-newline", "-t", "text/html"]
+    kwargs = seen["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["capture_output"] is True
+    assert "check" not in kwargs
+
+
+def test_read_required_reports_a_missing_mime(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(args[0], 1, stdout=b"", stderr=b"No suitable type")
+
+    monkeypatch.setattr("neovim_harness.clipboard.subprocess.run", fake_run)
+    with pytest.raises(ClipboardError, match="The clipboard has no text/html content"):
+        WaylandClipboard().read_required("text/html")
+
+
+def test_read_required_reports_a_missing_wl_paste(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("wl-paste")
+
+    monkeypatch.setattr("neovim_harness.clipboard.subprocess.run", fake_run)
+    with pytest.raises(ClipboardError, match="The wl-paste command is not on PATH"):
+        WaylandClipboard().read_required("text/html")
+
+
+def test_read_required_rejects_an_empty_mime() -> None:
+    with pytest.raises(ClipboardError, match="A clipboard MIME type is required"):
+        WaylandClipboard().read_required("")

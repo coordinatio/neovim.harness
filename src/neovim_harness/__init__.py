@@ -1,3 +1,3 @@
-"""Clipboard editing sessions and named Neovide workspaces."""
+"""Clipboard editing sessions, Neovim conversions, and named Neovide workspaces."""
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"

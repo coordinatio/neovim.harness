@@ -10,10 +10,18 @@ from typing import Protocol
 logger = logging.getLogger(__name__)
 
 
+class ClipboardError(Exception):
+    """A required clipboard read or write failed."""
+
+
 class Clipboard(Protocol):
     def read(self, mimetype: str = "") -> bytes: ...
 
     def write(self, data: str, mimetype: str = "text/plain") -> None: ...
+
+
+class ReadsRequiredMime(Protocol):
+    def read_required(self, mimetype: str) -> bytes: ...
 
 
 class WaylandClipboard:
@@ -26,6 +34,18 @@ class WaylandClipboard:
         if mimetype:
             command.extend(["-t", mimetype])
         result = subprocess.run(command, capture_output=True)
+        return result.stdout
+
+    def read_required(self, mimetype: str) -> bytes:
+        if not mimetype:
+            raise ClipboardError("A clipboard MIME type is required.")
+        command = ["wl-paste", "--no-newline", "-t", mimetype]
+        try:
+            result = subprocess.run(command, capture_output=True)
+        except FileNotFoundError as exc:
+            raise ClipboardError("The wl-paste command is not on PATH.") from exc
+        if result.returncode != 0:
+            raise ClipboardError(f"The clipboard has no {mimetype} content.")
         return result.stdout
 
     def write(self, data: str, mimetype: str = "text/plain") -> None:

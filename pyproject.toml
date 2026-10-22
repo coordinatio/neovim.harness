@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neovim.harness"
-version = "0.2.1"
-description = "Edit Wayland clipboard text in Neovide, or start and resume a named session."
+version = "0.3.0"
+description = "Edit Wayland clipboard text in Neovide, convert it from Neovim, or start and resume a named session."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

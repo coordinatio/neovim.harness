@@ -9,6 +9,7 @@ from neovim_harness.environment import (
     SUCCESS_TEXT,
     RequirementFailure,
     check_assets,
+    check_conversion_assets,
     check_cssutils,
     check_git,
     check_kdialog,
@@ -18,6 +19,7 @@ from neovim_harness.environment import (
     check_premailer,
     check_wayland_clipboard,
     check_wayland_session,
+    collect_conversion_failures,
     collect_failures,
     format_report,
 )
@@ -44,6 +46,10 @@ _CSSUTILS = (
 _WAYLAND = "WAYLAND_DISPLAY is not set.\nRun this install from a Wayland session."
 _ASSETS = (
     "The lua filter, the stylesheet, and the editor scripts could not be read.\n"
+    "Reinstall neovim.harness."
+)
+_CONVERSION_ASSETS = (
+    "The lua filter and the stylesheet could not be read.\n"
     "Reinstall neovim.harness."
 )
 
@@ -251,3 +257,97 @@ def test_collect_failures_is_empty_when_requirements_are_met(
         classmethod(lambda cls: Paths()),
     )
     assert collect_failures() == []
+
+
+def test_conversion_assets_message_when_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    css = tmp_path / "github-pandoc.css"
+    css.write_text("css", encoding="utf-8")
+
+    class Paths:
+        lua_filter = tmp_path / "missing.lua"
+        stylesheet = css
+
+    monkeypatch.setattr(
+        "neovim_harness.environment.ConversionAssets.load",
+        classmethod(lambda cls: Paths()),
+    )
+    assert check_conversion_assets() == RequirementFailure("Assets", _CONVERSION_ASSETS)
+
+
+def test_conversion_assets_message_when_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def explode(cls: object) -> None:
+        raise FileNotFoundError("missing assets")
+
+    monkeypatch.setattr(
+        "neovim_harness.environment.ConversionAssets.load",
+        classmethod(explode),
+    )
+    assert check_conversion_assets() == RequirementFailure("Assets", _CONVERSION_ASSETS)
+
+
+def test_conversion_check_ignores_the_editor_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    lua = tmp_path / "backics.lua"
+    css = tmp_path / "github-pandoc.css"
+    lua.write_text("lua", encoding="utf-8")
+    css.write_text("css", encoding="utf-8")
+
+    class Paths:
+        lua_filter = lua
+        stylesheet = css
+
+    monkeypatch.setattr(
+        "neovim_harness.environment.shutil.which",
+        lambda command: None
+        if command in {"neovide", "git", "kdialog"}
+        else f"/usr/bin/{command}",
+    )
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setattr(
+        "neovim_harness.environment.ConversionAssets.load",
+        classmethod(lambda cls: Paths()),
+    )
+    assert collect_conversion_failures() == []
+
+
+def test_conversion_check_lists_only_the_helper_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("neovim_harness.environment.shutil.which", lambda command: None)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    for name in ("lxml", "premailer", "cssutils"):
+        monkeypatch.setitem(sys.modules, name, None)
+
+    def explode(cls: object) -> None:
+        raise FileNotFoundError("missing assets")
+
+    monkeypatch.setattr(
+        "neovim_harness.environment.ConversionAssets.load",
+        classmethod(explode),
+    )
+    failures = collect_conversion_failures()
+    assert [failure.title for failure in failures] == [
+        "pandoc",
+        "Wayland clipboard",
+        "lxml",
+        "premailer",
+        "cssutils",
+        "Wayland session",
+        "Assets",
+    ]
+    assert [failure.paragraph for failure in failures] == [
+        _PANDOC,
+        _WL_BOTH,
+        _LXML,
+        _PREMAILER,
+        _CSSUTILS,
+        _WAYLAND,
+        _CONVERSION_ASSETS,
+    ]

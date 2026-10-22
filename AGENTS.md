@@ -1,6 +1,6 @@
 # Agents
 
-Neovim Harness is a Wayland clipboard editor and a launcher for longer Neovide sessions. Clipboard modes write a session file, open that file in Neovide, and copy the result back to the clipboard. Named sessions start from an empty directory with a git repository and do not touch the clipboard.
+Neovim Harness is a Wayland clipboard editor and a launcher for longer Neovide sessions. Clipboard modes write a session file, open that file in Neovide, and copy the result back to the clipboard. Named sessions start from an empty directory with a git repository and do not touch the clipboard. An optional Neovim module copies a Markdown selection to the clipboard as HTML and pastes clipboard HTML back as Markdown. The editor modes are unchanged.
 
 ## Modes
 
@@ -12,8 +12,10 @@ Neovim Harness is a Wayland clipboard editor and a launcher for longer Neovide s
 | `neovim.harness -n` | empty file | `+start` then `+colorscheme retrobox` | `text/html` |
 | `neovim.harness -s` / `--session` | `kdialog` title, then an empty directory and `git init -b main` | `+start` | none |
 | `neovim.harness -r` / `--resume` | a session chosen in the picker | `+start` | none |
+| `neovim.harness --clipboard-to-markdown` | `wl-paste --no-newline -t text/html`, then strict Pandoc to GFM | none | reads `text/html`; Markdown goes to stdout |
+| `neovim.harness --markdown-to-clipboard` | UTF-8 Markdown on stdin, then strict Pandoc to HTML | none | writes `text/html`; stdout stays empty |
 
-`-p`, `-m`, `-n`, `-s`, and `-r` are mutually exclusive. The default is new plain text. `-v` / `--verbose` enables debug logging. `--check-environment` only prints the requirement report.
+`-p`, `-m`, `-n`, `-s`, `-r`, `--clipboard-to-markdown`, and `--markdown-to-clipboard` are mutually exclusive. The default is new plain text. `-v` / `--verbose` enables debug logging. `--check-environment` only prints the full requirement report, including when a helper flag is also present, and does not convert anything.
 
 ## Invariants
 
@@ -30,9 +32,11 @@ Neovim Harness is a Wayland clipboard editor and a launcher for longer Neovide s
 - A missing `neovide` executable, or any other launch failure, exits 1. If the editor fails before it returns, the rename-request temporary directory is removed. A normal return still lets that request be read.
 - If the session file is gone after the editor exits, do not write the clipboard.
 - Plain modes write only `text/plain`. Formatted modes write only `text/html`. Named and resumed sessions do not read or write the clipboard.
-- Clipboard read is `wl-paste --no-newline`, plus `-t <mime>` when a MIME type is requested. Clipboard write is `wl-copy`. Plain writes pass `-t text/plain` and formatted writes pass `-t text/html`. An empty MIME type omits `-t`.
-- HTML to Markdown: `pandoc -f html -t gfm-raw_html --wrap=none --lua-filter=<backics.lua>`. Empty HTML becomes an empty Markdown file and does not call Pandoc. Pandoc failure returns an empty string.
-- Markdown to HTML: `pandoc -f markdown+hard_line_breaks+lists_without_preceding_blankline -c <github-pandoc.css> --embed-resources --standalone`, then `premailer` with `remove_classes=True`, then lxml keeps only the `body` element's children. Premailer failure returns the Pandoc HTML. lxml failure, or a missing `body`, returns the inlined HTML. Pandoc failure returns an empty string.
+- Clipboard read is `wl-paste --no-newline`, plus `-t <mime>` when a MIME type is requested. Clipboard write is `wl-copy`. Plain writes pass `-t text/plain` and formatted writes pass `-t text/html`. An empty MIME type omits `-t`. `read()` still returns stdout when `wl-paste` fails. `read_required(mime)` uses that same argv and raises when `wl-paste` does not exit 0. The message is `The clipboard has no <mime> content.` A missing `wl-paste` says `The wl-paste command is not on PATH.`
+- HTML to Markdown: `pandoc -f html -t gfm-raw_html --wrap=none --lua-filter=<backics.lua>`. Empty HTML becomes an empty Markdown file and does not call Pandoc. For editor modes, Pandoc failure returns an empty string. `convert_strict()` raises that failure instead.
+- Markdown to HTML: `pandoc -f markdown+hard_line_breaks+lists_without_preceding_blankline -c <github-pandoc.css> --embed-resources --standalone`, then `premailer` with `remove_classes=True`, then lxml keeps only the `body` element's children. Premailer failure returns the Pandoc HTML. lxml failure, or a missing `body`, returns the inlined HTML. Those fallbacks stay successful for both `convert()` and `convert_strict()`. For editor modes, Pandoc failure returns an empty string. `convert_strict()` raises that failure instead.
+- `--clipboard-to-markdown` and `--markdown-to-clipboard` exit 0 on success and 1 on a clipboard, Pandoc, UTF-8, or launch failure. Diagnostics go to stderr and never to the data stream. They do not create a session. Their environment check is Pandoc, `wl-copy`, `wl-paste`, `lxml`, `premailer`, `cssutils`, `WAYLAND_DISPLAY`, and the Pandoc filter and stylesheet. It does not check Neovide, git, kdialog, or the editor scripts. A failed `wl-copy` says `Could not copy text/html to the clipboard.` A missing `wl-copy` says `The wl-copy command is not on PATH.` Markdown that is not UTF-8 says `Markdown from stdin is not valid UTF-8.`
+- The Neovim module lives at `share/nvim/site/pack/neovim-harness/start/neovim-harness/lua/neovim_harness/init.lua` and is installed under `/usr/share/nvim/site`. `require("neovim_harness").setup()` registers `:HarnessCopyHtml` and `:HarnessPasteMarkdown`. The default mappings are `<leader>mh` in visual mode and `<leader>mp` in normal and visual mode. `false` disables that mapping. Commands are registered either way. `setup()` can be called again. Neovim older than 0.10 makes `setup()` report `neovim_harness requires Neovim 0.10 or newer.` and register nothing. Characterwise and linewise selections are supported. Blockwise selection notifies `Blockwise selection cannot be converted.` and does not start a process. Copy reads the selection before `vim.system({command, "--markdown-to-clipboard"})` and does not change the buffer. Paste runs `vim.system({command, "--clipboard-to-markdown"})` with no stdin. Normal mode inserts after the cursor, as `p` does. Visual mode replaces the selection. The insert is one undo step. If `changedtick` changes before the result arrives, the result is not inserted. An invalid buffer, a non-zero exit, or a missing program shows `vim.notify(..., ERROR)` and does not change the buffer. Processes are not run through a shell.
 - Suppress `cssutils` logging to `CRITICAL` during conversion. `cssutils` is imported directly.
 - `backics.lua`, `github-pandoc.css`, `rename.lua`, and `resume.lua` are package data. Resolve them with `importlib.resources.as_file`. Pass the Pandoc paths to Pandoc and the editor scripts to Neovide.
 - `:start` and `retrobox` are literal Ex commands from the user's Neovim config. This package does not install them and does not probe for them.
@@ -45,6 +49,7 @@ Neovim Harness is a Wayland clipboard editor and a launcher for longer Neovide s
 | Change | Owner |
 |---|---|
 | Mode policy (input, Ex commands, output MIME) | `modes.py` — one class per workflow |
+| Headless HTML and Markdown direction | `modes.py` — `ClipboardToMarkdown` and `MarkdownToClipboard`; `app.py` does not run them |
 | Clipboard argv | `clipboard.py` |
 | Pandoc argv and HTML fallbacks | `convert.py` |
 | Package-data paths | `assets.py` |
@@ -54,8 +59,9 @@ Neovim Harness is a Wayland clipboard editor and a launcher for longer Neovide s
 | `git init` argv | `repository.py` |
 | Neovide argv, working directory, detached streams | `editor.py` |
 | Requirement report text | `environment.py` |
+| Neovim selection, mappings, and `vim.system` | `share/nvim/site/pack/neovim-harness/start/neovim-harness/lua/neovim_harness/init.lua` |
 
-A new workflow is a new mode class plus a CLI flag. Keep the `app.py` sequence as it is.
+A new workflow is a new mode class plus a CLI flag. Keep the `app.py` sequence as it is. Headless conversion follows that rule and does not enter `app.py`.
 
 ## Desktop files
 
@@ -72,7 +78,7 @@ Source files live in `share/applications/`. `Exec` is the PATH command `neovim.h
 
 ## Tests
 
-- `tests/unit/` uses fakes and `monkeypatch`. It must not read or write the real clipboard, launch Neovide, or create directories under the user's home. Session tests use `tmp_path`.
+- `tests/unit/` uses fakes and `monkeypatch`. It must not read or write the real clipboard, launch Neovide, or create directories under the user's home. Session tests use `tmp_path`. `tests/unit/test_nvim_plugin.py` runs the Lua module in headless Neovim with `vim.system` mocked.
 - `tests/environment/` calls the real machine: real `PATH`, real imports, and the real `WAYLAND_DISPLAY`. It does not launch Neovide. Each failed assertion message is only that check's user-facing paragraph. `tests/environment/conftest.py` reprints the failures as one report.
 
 ```sh

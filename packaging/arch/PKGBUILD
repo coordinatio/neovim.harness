@@ -1,8 +1,8 @@
 # Maintainer: neovim.harness contributors
 pkgname=neovim.harness
-pkgver=0.2.1
+pkgver=0.3.0
 pkgrel=1
-pkgdesc='Edit Wayland clipboard text in Neovide, or start and resume a named session'
+pkgdesc='Edit Wayland clipboard text in Neovide, convert it from Neovim, or start and resume a named session'
 arch=('any')
 license=('MIT')
 depends=(
@@ -13,6 +13,7 @@ depends=(
   pandoc-cli
   wl-clipboard
   neovide
+  neovim
   git
   kdialog
 )
@@ -54,4 +55,6 @@ package() {
     "$pkgdir/usr/share/applications/neovim.harness.new-session.desktop"
   install -Dm644 share/applications/neovim.harness.resume-session.desktop \
     "$pkgdir/usr/share/applications/neovim.harness.resume-session.desktop"
+  install -Dm644 share/nvim/site/pack/neovim-harness/start/neovim-harness/lua/neovim_harness/init.lua \
+    "$pkgdir/usr/share/nvim/site/pack/neovim-harness/start/neovim-harness/lua/neovim_harness/init.lua"
 }

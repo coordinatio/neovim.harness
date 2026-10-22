@@ -1,10 +1,10 @@
 # Neovim Harness
 
-Neovim Harness takes text from the Wayland clipboard, opens it in Neovide, and copies the result back when the editor closes. Plain-text sessions copy `text/plain`. Formatted sessions are edited as Markdown and copy styled HTML.
+Neovim Harness takes text from the Wayland clipboard, opens it in Neovide, and copies the result back when the editor closes. Plain-text sessions copy `text/plain`. Formatted sessions are edited as Markdown and copy styled HTML. An optional Neovim module can also copy a Markdown selection to the clipboard as HTML, or paste clipboard HTML back as Markdown, without opening another editor.
 
 A named session is for work you expect to reopen. It asks for a title, creates an empty directory, initializes a git repository, and does not use the clipboard. Resume lists previous sessions, newest regular-file activity first, with a preview of the latest text files.
 
-`-p`, `-m`, `-n`, `-s`, and `-r` are mutually exclusive. With no flag, the tool starts a new plain-text document. `-v` / `--verbose` turns on debug logging.
+`-p`, `-m`, `-n`, `-s`, `-r`, `--clipboard-to-markdown`, and `--markdown-to-clipboard` are mutually exclusive. With no flag, the tool starts a new plain-text document. `-v` / `--verbose` turns on debug logging.
 
 ## Commands
 
@@ -30,6 +30,52 @@ These desktop entries are installed for KRunner and other application launchers.
 | Neovim Harness: New Session | `neovim.harness -s` |
 | Neovim Harness: Resume Session | `neovim.harness -r` |
 
+## Neovim
+
+The Arch package installs an optional module on Neovim's runtime path. It does not change `p`. Enable it from your configuration:
+
+```lua
+require("neovim_harness").setup()
+```
+
+Neovim 0.10 or newer is required. On an older version, `setup()` shows an error and does not create commands.
+
+```lua
+require("neovim_harness").setup({
+  command = "neovim.harness",
+  mappings = {
+    copy_html = "<leader>mh",
+    paste_markdown = "<leader>mp",
+  },
+})
+```
+
+Set a mapping to `false` to leave it unset. The commands are created either way. Calling `setup()` again replaces the previous commands and mappings.
+
+| Action | Command | Mapping |
+|---|---|---|
+| Copy the visual selection to the clipboard as HTML | `:HarnessCopyHtml` | `<leader>mh` in visual mode |
+| Paste clipboard HTML as Markdown | `:HarnessPasteMarkdown` | `<leader>mp` in normal and visual mode |
+
+Characterwise and linewise selections are supported. A blockwise selection shows an error and does not start a conversion. Copy reads the selection before the converter runs and does not change the buffer. Paste in normal mode inserts the Markdown after the cursor, as `p` does. Paste in visual mode replaces the selection. That insertion is one undo step.
+
+The converter runs in the background. If the buffer changes before the result comes back, the result is discarded. A missing `text/html` clipboard value, a Pandoc failure, any other non-zero exit, or a missing `neovim.harness` command shows an error and leaves the buffer unchanged.
+
+These are the commands the module runs. They do not open Neovide. Errors go to standard error, and a successful copy leaves standard output empty.
+
+| Command | Effect |
+|---|---|
+| `neovim.harness --clipboard-to-markdown` | Read `text/html` and write Markdown to standard output |
+| `neovim.harness --markdown-to-clipboard` | Read UTF-8 Markdown from standard input and copy `text/html` |
+
+From a git checkout, add the plugin directory before `setup()`:
+
+```lua
+vim.opt.runtimepath:append("/path/to/neovim.harness/share/nvim/site/pack/neovim-harness/start/neovim-harness")
+```
+
+The installed package already places that directory under `/usr/share/nvim/site`.
+
 ## Requirements
 
 - Python
@@ -39,6 +85,7 @@ These desktop entries are installed for KRunner and other application launchers.
 - `pandoc-cli`
 - `wl-clipboard`
 - `neovide`
+- `neovim` 0.10 or newer, for the optional module
 - `git`
 - `kdialog`
 

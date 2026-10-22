@@ -33,11 +33,22 @@ def _pandoc_failure_detail(exc: Exception) -> str:
     return str(exc)
 
 
+class ConversionError(Exception):
+    """Pandoc could not convert the document."""
+
+
 class HtmlToMarkdown:
     def __init__(self, lua_filter: Path) -> None:
         self._lua_filter = lua_filter
 
     def convert(self, html_content: bytes) -> str:
+        try:
+            return self.convert_strict(html_content)
+        except ConversionError as exc:
+            logger.error("%s", exc)
+            return ""
+
+    def convert_strict(self, html_content: bytes) -> str:
         if not html_content:
             return ""
         command = [
@@ -58,8 +69,9 @@ class HtmlToMarkdown:
             )
             return result.stdout.decode("utf-8")
         except _PANDOC_FAILURES as exc:
-            logger.error(f"Pandoc html_to_gfm failed: {_pandoc_failure_detail(exc)}")
-            return ""
+            raise ConversionError(
+                f"Pandoc html_to_gfm failed: {_pandoc_failure_detail(exc)}"
+            ) from exc
 
 
 class MarkdownToHtml:
@@ -67,6 +79,13 @@ class MarkdownToHtml:
         self._stylesheet = stylesheet
 
     def convert(self, markdown_content: str) -> str:
+        try:
+            return self.convert_strict(markdown_content)
+        except ConversionError as exc:
+            logger.error("%s", exc)
+            return ""
+
+    def convert_strict(self, markdown_content: str) -> str:
         cssutils.log.setLevel(logging.CRITICAL)
         command = [
             "pandoc",
@@ -86,8 +105,9 @@ class MarkdownToHtml:
             )
             raw_html = proc.stdout.decode("utf-8")
         except _PANDOC_FAILURES as exc:
-            logger.error(f"Pandoc failed: {_pandoc_failure_detail(exc)}")
-            return ""
+            raise ConversionError(
+                f"Pandoc failed: {_pandoc_failure_detail(exc)}"
+            ) from exc
 
         try:
             inlined_html = premailer_transform(raw_html, remove_classes=True)

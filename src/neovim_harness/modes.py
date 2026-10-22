@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Protocol
+from typing import BinaryIO, Protocol
 
-from neovim_harness.clipboard import Clipboard
+from neovim_harness.clipboard import Clipboard, ReadsRequiredMime
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,14 @@ class ConvertsHtmlToMarkdown(Protocol):
 
 class ConvertsMarkdownToHtml(Protocol):
     def convert(self, markdown_content: str) -> str: ...
+
+
+class ConvertsHtmlStrictly(Protocol):
+    def convert_strict(self, html_content: bytes) -> str: ...
+
+
+class ConvertsMarkdownStrictly(Protocol):
+    def convert_strict(self, markdown_content: str) -> str: ...
 
 
 class Workflow(Protocol):
@@ -174,3 +182,29 @@ class ResumeSession:
         markdown_to_html: ConvertsMarkdownToHtml,
     ) -> None:
         return
+
+
+class ClipboardToMarkdown:
+    """Read text/html and write Markdown to stdout."""
+
+    def run(
+        self,
+        clipboard: ReadsRequiredMime,
+        html_to_markdown: ConvertsHtmlStrictly,
+        stdout: BinaryIO,
+    ) -> None:
+        markdown = html_to_markdown.convert_strict(clipboard.read_required("text/html"))
+        stdout.write(markdown.encode("utf-8"))
+        stdout.flush()
+
+
+class MarkdownToClipboard:
+    """Read Markdown and write text/html to the clipboard."""
+
+    def run(
+        self,
+        markdown: str,
+        clipboard: Clipboard,
+        markdown_to_html: ConvertsMarkdownStrictly,
+    ) -> None:
+        clipboard.write(markdown_to_html.convert_strict(markdown), mimetype="text/html")

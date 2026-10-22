@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from lxml import html as lxml_html
 
-from neovim_harness.convert import HtmlToMarkdown, MarkdownToHtml
+from neovim_harness.convert import ConversionError, HtmlToMarkdown, MarkdownToHtml
 
 
 def _completed(stdout: bytes) -> subprocess.CompletedProcess[bytes]:
@@ -15,7 +15,9 @@ def _completed(stdout: bytes) -> subprocess.CompletedProcess[bytes]:
 
 
 def test_empty_html_skips_pandoc(tmp_path: Path) -> None:
-    assert HtmlToMarkdown(tmp_path / "backics.lua").convert(b"") == ""
+    converter = HtmlToMarkdown(tmp_path / "backics.lua")
+    assert converter.convert(b"") == ""
+    assert converter.convert_strict(b"") == ""
 
 
 def test_html_to_markdown_arguments(
@@ -203,6 +205,80 @@ def test_lxml_failure_returns_inlined_html(
     caplog.set_level(logging.ERROR)
     assert MarkdownToHtml(tmp_path / "style.css").convert("x") == inlined
     assert "XML parsing failed: bad xml" in caplog.text
+
+
+def test_strict_html_conversion_reports_pandoc_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run(*args: object, **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(1, args[0], stderr=b"no filter\n")
+
+    monkeypatch.setattr("neovim_harness.convert.subprocess.run", fake_run)
+    converter = HtmlToMarkdown(tmp_path / "backics.lua")
+    with pytest.raises(ConversionError, match="Pandoc html_to_gfm failed: no filter"):
+        converter.convert_strict(b"<p>x</p>")
+    assert converter.convert(b"<p>x</p>") == ""
+
+
+def test_strict_markdown_conversion_reports_pandoc_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run(*args: object, **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(1, args[0], stderr=b"bad md")
+
+    monkeypatch.setattr("neovim_harness.convert.subprocess.run", fake_run)
+    converter = MarkdownToHtml(tmp_path / "github-pandoc.css")
+    with pytest.raises(ConversionError, match="Pandoc failed: bad md"):
+        converter.convert_strict("x")
+    assert converter.convert("x") == ""
+
+
+def test_strict_markdown_conversion_keeps_premailer_and_lxml_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    inlined = "<html><body><p>inlined</p></body></html>"
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        return _completed(b"<html>raw</html>")
+
+    def broken_premailer(*args: object, **kwargs: object) -> str:
+        raise RuntimeError("css broke")
+
+    def broken_xml(html: str) -> object:
+        raise RuntimeError("bad xml")
+
+    monkeypatch.setattr("neovim_harness.convert.subprocess.run", fake_run)
+    monkeypatch.setattr("neovim_harness.convert.premailer_transform", broken_premailer)
+    assert MarkdownToHtml(tmp_path / "style.css").convert_strict("x") == "<html>raw</html>"
+
+    monkeypatch.setattr(
+        "neovim_harness.convert.premailer_transform",
+        lambda html, remove_classes=False: inlined,
+    )
+    monkeypatch.setattr("neovim_harness.convert.lxml_html.fromstring", broken_xml)
+    assert MarkdownToHtml(tmp_path / "style.css").convert_strict("x") == inlined
+
+
+def test_pandoc_failure_detail_accepts_text_and_missing_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def text_stderr(*args: object, **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(1, args[0], stderr="plain text")
+
+    monkeypatch.setattr("neovim_harness.convert.subprocess.run", text_stderr)
+    with pytest.raises(ConversionError, match="Pandoc failed: plain text"):
+        MarkdownToHtml(tmp_path / "style.css").convert_strict("x")
+
+    def missing_stderr(*args: object, **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(1, args[0])
+
+    monkeypatch.setattr("neovim_harness.convert.subprocess.run", missing_stderr)
+    with pytest.raises(ConversionError, match=r"Pandoc html_to_gfm failed:\s*$"):
+        HtmlToMarkdown(tmp_path / "backics.lua").convert_strict(b"<p>x</p>")
 
 
 def test_missing_body_returns_inlined_html(

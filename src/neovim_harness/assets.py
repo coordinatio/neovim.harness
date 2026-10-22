@@ -6,6 +6,29 @@ from importlib.resources import as_file, files
 from pathlib import Path
 
 
+class ConversionAssets:
+    """The Pandoc filter and stylesheet. Resource files stay open while this lives."""
+
+    def __init__(
+        self,
+        lua_filter: Path,
+        stylesheet: Path,
+        _open_resources: list[object],
+    ) -> None:
+        self.lua_filter = lua_filter
+        self.stylesheet = stylesheet
+        self._open_resources = _open_resources
+
+    @classmethod
+    def load(cls) -> ConversionAssets:
+        open_resources: list[object] = []
+        return cls(
+            _as_path("backics.lua", open_resources),
+            _as_path("github-pandoc.css", open_resources),
+            open_resources,
+        )
+
+
 class AssetPaths:
     def __init__(
         self,

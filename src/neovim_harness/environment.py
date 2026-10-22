@@ -5,11 +5,11 @@ from __future__ import annotations
 import importlib
 import os
 import shutil
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from neovim_harness.assets import AssetPaths
+from neovim_harness.assets import AssetPaths, ConversionAssets
 
 SUCCESS_TEXT = "Neovim Harness environment check passed."
 
@@ -21,18 +21,40 @@ class RequirementFailure:
 
 
 def collect_failures() -> list[RequirementFailure]:
-    checks = (
-        check_neovide,
-        check_pandoc,
-        check_git,
-        check_kdialog,
-        check_wayland_clipboard,
-        check_lxml,
-        check_premailer,
-        check_cssutils,
-        check_wayland_session,
-        check_assets,
+    return _collect(
+        (
+            check_neovide,
+            check_pandoc,
+            check_git,
+            check_kdialog,
+            check_wayland_clipboard,
+            check_lxml,
+            check_premailer,
+            check_cssutils,
+            check_wayland_session,
+            check_assets,
+        )
     )
+
+
+def collect_conversion_failures() -> list[RequirementFailure]:
+    """Requirements for the headless HTML and Markdown commands."""
+    return _collect(
+        (
+            check_pandoc,
+            check_wayland_clipboard,
+            check_lxml,
+            check_premailer,
+            check_cssutils,
+            check_wayland_session,
+            check_conversion_assets,
+        )
+    )
+
+
+def _collect(
+    checks: Sequence[Callable[[], RequirementFailure | None]],
+) -> list[RequirementFailure]:
     failures: list[RequirementFailure] = []
     for check in checks:
         failure = check()
@@ -159,6 +181,20 @@ def check_assets() -> RequirementFailure | None:
     return RequirementFailure(
         "Assets",
         "The lua filter, the stylesheet, and the editor scripts could not be read.\n"
+        "Reinstall neovim.harness.",
+    )
+
+
+def check_conversion_assets() -> RequirementFailure | None:
+    try:
+        assets = ConversionAssets.load()
+        if _readable(assets.lua_filter) and _readable(assets.stylesheet):
+            return None
+    except Exception:
+        pass
+    return RequirementFailure(
+        "Assets",
+        "The lua filter and the stylesheet could not be read.\n"
         "Reinstall neovim.harness.",
     )
 

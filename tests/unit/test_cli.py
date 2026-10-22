@@ -104,6 +104,8 @@ def test_help_lists_the_flags(capsys: pytest.CaptureFixture[str]) -> None:
         "--resume",
         "--check-environment",
         "--verbose",
+        "--clipboard-to-markdown",
+        "--markdown-to-clipboard",
     ):
         assert flag in output
 
@@ -115,6 +117,9 @@ def test_help_lists_the_flags(capsys: pytest.CaptureFixture[str]) -> None:
         ["-s", "-r"],
         ["-s", "-p"],
         ["-n", "--resume"],
+        ["--clipboard-to-markdown", "--markdown-to-clipboard"],
+        ["-m", "--clipboard-to-markdown"],
+        ["--markdown-to-clipboard", "-s"],
     ],
 )
 def test_mode_flags_are_mutually_exclusive(argv: list[str]) -> None:

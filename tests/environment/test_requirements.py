@@ -4,6 +4,7 @@ import pytest
 
 from neovim_harness.environment import (
     check_assets,
+    check_conversion_assets,
     check_cssutils,
     check_git,
     check_kdialog,
@@ -60,3 +61,7 @@ def test_wayland_session() -> None:
 
 def test_assets_readable() -> None:
     _require(check_assets())
+
+
+def test_conversion_assets_readable() -> None:
+    _require(check_conversion_assets())
