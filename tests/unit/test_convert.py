@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -49,6 +52,7 @@ def test_html_to_markdown_arguments(
     assert kwargs["input"] == b"<p>title</p>"
     assert kwargs["capture_output"] is True
     assert kwargs["check"] is True
+    assert kwargs["timeout"] == 30
 
 
 def test_html_to_markdown_pandoc_failure_returns_empty(
@@ -103,6 +107,7 @@ def test_markdown_to_html_arguments_and_body_extraction(
     kwargs = seen["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["input"] == b"hello"
+    assert kwargs["timeout"] == 30
     assert seen["remove_classes"] is True
     assert seen["transformed_from"] == "<html>raw</html>"
     assert logging.CRITICAL in levels
@@ -279,6 +284,82 @@ def test_pandoc_failure_detail_accepts_text_and_missing_stderr(
     monkeypatch.setattr("neovim_harness.convert.subprocess.run", missing_stderr)
     with pytest.raises(ConversionError, match=r"Pandoc html_to_gfm failed:\s*$"):
         HtmlToMarkdown(tmp_path / "backics.lua").convert_strict(b"<p>x</p>")
+
+
+def test_pandoc_timeout_is_a_strict_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def fake_run(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(args[0], 30)
+
+    def explode(*args: object, **kwargs: object) -> str:
+        raise AssertionError("premailer should not run")
+
+    monkeypatch.setattr("neovim_harness.convert.subprocess.run", fake_run)
+    monkeypatch.setattr("neovim_harness.convert.premailer_transform", explode)
+    caplog.set_level(logging.ERROR)
+    html = HtmlToMarkdown(tmp_path / "backics.lua")
+    with pytest.raises(ConversionError) as html_error:
+        html.convert_strict(b"<p>x</p>")
+    assert str(html_error.value) == "Timed out waiting for pandoc."
+    assert html.convert(b"<p>x</p>") == ""
+    markdown = MarkdownToHtml(tmp_path / "style.css")
+    with pytest.raises(ConversionError) as markdown_error:
+        markdown.convert_strict("x")
+    assert str(markdown_error.value) == "Timed out waiting for pandoc."
+    assert markdown.convert("x") == ""
+    assert caplog.text.count("Timed out waiting for pandoc.") == 2
+
+
+def test_markdown_conversion_loads_premailer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def transform(html: str, remove_classes: bool = False) -> str:
+        captured["html"] = html
+        captured["remove_classes"] = remove_classes
+        return "<html><body><p>Hi</p></body></html>"
+
+    fake = types.ModuleType("premailer")
+    fake.transform = transform
+    monkeypatch.setitem(sys.modules, "premailer", fake)
+    monkeypatch.setattr(
+        "neovim_harness.convert.subprocess.run",
+        lambda *args, **kwargs: _completed(b"<html>raw</html>"),
+    )
+    result = MarkdownToHtml(tmp_path / "style.css").convert_strict("x")
+    assert captured == {"html": "<html>raw</html>", "remove_classes": True}
+    assert "Hi" in result
+    assert "<html" not in result
+
+
+def test_importing_convert_does_not_import_html_libraries() -> None:
+    root = Path(__file__).resolve().parents[2]
+    script = """
+import sys
+import neovim_harness.convert
+from neovim_harness.convert import HtmlToMarkdown
+from neovim_harness.environment import collect_html_to_markdown_failures
+HtmlToMarkdown("backics.lua")
+collect_html_to_markdown_failures()
+for name in ("lxml", "premailer", "cssutils"):
+    assert name not in sys.modules, name
+"""
+    # Unit tests replace subprocess.run. Popen stays available for this interpreter.
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        cwd=root,
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    stdout, stderr = process.communicate(timeout=30)
+    assert process.returncode == 0, stdout + stderr
 
 
 def test_missing_body_returns_inlined_html(

@@ -32,14 +32,20 @@ end
 
 local function install_system()
   vim.system = function(cmd, opts, on_exit)
-    table.insert(jobs, {
+    local job = {
       cmd = vim.deepcopy(cmd),
       stdin = opts and opts.stdin,
       text = opts and opts.text,
       shell = opts and opts.shell,
       on_exit = on_exit,
-    })
-    return { pid = -1 }
+      killed = false,
+    }
+    function job:kill(signal)
+      self.killed = true
+      self.signal = signal
+    end
+    table.insert(jobs, job)
+    return job
   end
 end
 
@@ -75,6 +81,8 @@ local function begin()
   if mode == "v" or mode == "V" or mode == "\22" then
     vim.cmd("normal! \x1b")
   end
+  vim.o.selection = "inclusive"
+  vim.o.virtualedit = ""
 end
 
 local function test(name, fn)
@@ -326,6 +334,7 @@ test("normal paste inserts after the cursor in one undo", function()
   check(job.shell == nil, "the process used a shell")
   finish({ code = 0, stdout = "X", stderr = "" })
   same(text_of(buf), { "heXllo" }, "normal paste")
+  same(vim.api.nvim_win_get_cursor(0), { 1, 2 }, "cursor")
   vim.cmd("silent! undo")
   same(text_of(buf), { "hello" }, "undo")
 end)
@@ -336,6 +345,7 @@ test("normal paste keeps a multiline result in one undo", function()
   vim.cmd("HarnessPasteMarkdown")
   finish({ code = 0, stdout = "X\nY", stderr = "" })
   same(text_of(buf), { "heX", "Yllo" }, "multiline paste")
+  same(vim.api.nvim_win_get_cursor(0), { 1, 2 }, "cursor")
   vim.cmd("silent! undo")
   same(text_of(buf), { "hello" }, "undo")
 end)
@@ -424,6 +434,260 @@ test("missing clipboard HTML notifies and does not change the buffer", function(
   same(notes, {
     { message = "The clipboard has no text/html content.", level = vim.log.levels.ERROR },
   }, "missing mime")
+end)
+
+test("a grapheme cluster is copied and replaced whole", function()
+  local combining = "e\u{0301}"
+  local emoji = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
+  local buf = buffer({ combining .. "x" })
+  vim.cmd("normal! v")
+  local highlighted = table.concat(vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), { type = "v" }), "\n")
+  same(highlighted, combining, "combining highlight")
+  press_copy()
+  same(last_job().stdin, combining, "combining copy")
+  jobs = {}
+  vim.cmd("normal! v")
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "Zx" }, "combining paste")
+
+  jobs = {}
+  notes = {}
+  buf = buffer({ "a" .. emoji .. "b" })
+  vim.cmd("normal! lv")
+  highlighted = table.concat(vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), { type = "v" }), "\n")
+  same(highlighted, emoji, "emoji highlight")
+  press_copy()
+  same(last_job().stdin, emoji, "emoji copy")
+  jobs = {}
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  vim.cmd("normal! lv")
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "aZb" }, "emoji paste")
+end)
+
+test("exclusive selection stops before the cursor", function()
+  vim.o.selection = "exclusive"
+  local buf = buffer({ "abcd" })
+  vim.cmd("normal! 0vlll")
+  local highlighted = table.concat(vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), { type = "v" }), "\n")
+  same(highlighted, "abc", "exclusive highlight")
+  press_copy()
+  same(last_job().stdin, "abc", "exclusive copy")
+  jobs = {}
+  notes = {}
+  vim.cmd("normal! 0vlll")
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "Zd" }, "exclusive paste")
+end)
+
+test("virtualedit columns are copied and the buffer keeps real bytes", function()
+  vim.o.virtualedit = "all"
+  local buf = buffer({ "ab" })
+  vim.cmd("normal! 0lv")
+  vim.cmd("normal! 5l")
+  local highlighted = table.concat(vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), { type = "v" }), "\n")
+  same(highlighted, "b" .. string.rep(" ", 5), "virtual highlight")
+  press_copy()
+  same(last_job().stdin, highlighted, "virtual copy")
+  jobs = {}
+  vim.cmd("normal! 0lv")
+  vim.cmd("normal! 5l")
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "aZ" }, "virtual paste")
+end)
+
+test("a single address copies that line", function()
+  buffer({ "abcd", "efgh" })
+  select_chars(1, 1, 2)
+  vim.cmd("normal! \x1b")
+  vim.cmd("2HarnessCopyHtml")
+  same(last_job().stdin, "efgh\n", "other line")
+  jobs = {}
+  select_chars(2, 0, 1)
+  vim.cmd("normal! \x1b")
+  vim.cmd("2HarnessCopyHtml")
+  same(last_job().stdin, "efgh\n", "same line")
+end)
+
+test("a paste range on other lines replaces those lines", function()
+  local buf = buffer({ "abcd", "efgh", "ijkl" })
+  select_chars(1, 1, 2)
+  vim.cmd("normal! \x1b")
+  vim.cmd("2,3HarnessPasteMarkdown")
+  finish({ code = 0, stdout = "Z\n", stderr = "" })
+  same(text_of(buf), { "abcd", "Z" }, "line range")
+end)
+
+test("a same-line two-address range keeps the characterwise selection", function()
+  local buf = buffer({ "abcd" })
+  select_chars(1, 1, 2)
+  vim.cmd("normal! \x1b")
+  vim.cmd("1,1HarnessPasteMarkdown")
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "aZd" }, "same-line range")
+end)
+
+test("a line address does not reuse a blockwise selection", function()
+  buffer({ "abcd", "efgh" })
+  select_block()
+  vim.cmd("normal! \x1b")
+  vim.cmd("1HarnessCopyHtml")
+  same(last_job().stdin, "abcd\n", "line")
+  check(#notes == 0, "blockwise was reused")
+end)
+
+test("a newer paste cancels the previous request", function()
+  local buf = buffer({ "hello" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  press_paste_normal()
+  press_paste_normal()
+  check(#jobs == 2, "two pastes")
+  check(jobs[1].killed == true, "old paste was not killed")
+  check(jobs[1].signal == "sigterm", "signal")
+  jobs[1].on_exit({ code = 0, stdout = "OLD", stderr = "" })
+  pump()
+  same(text_of(buf), { "hello" }, "stale paste inserted")
+  check(#notes == 0, "stale callback notified " .. vim.inspect(notes))
+  jobs[2].on_exit({ code = 0, stdout = "NEW", stderr = "" })
+  pump()
+  same(text_of(buf), { "heNEWllo" }, "newer paste")
+  check(#notes == 0, "newer paste notified " .. vim.inspect(notes))
+end)
+
+test("a callback delivered by cancelling a paste does not insert", function()
+  local buf = buffer({ "hello" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.system = function(cmd, opts, on_exit)
+    local job = {
+      cmd = vim.deepcopy(cmd),
+      stdin = opts and opts.stdin,
+      text = opts and opts.text,
+      shell = opts and opts.shell,
+      on_exit = on_exit,
+      killed = false,
+    }
+    function job:kill(signal)
+      self.killed = true
+      self.signal = signal
+      self.on_exit({ code = 0, stdout = "OLD", stderr = "" })
+    end
+    table.insert(jobs, job)
+    return job
+  end
+  press_paste_normal()
+  press_paste_normal()
+  pump()
+  same(text_of(buf), { "hello" }, "stale paste inserted")
+  check(#notes == 0, "stale callback notified " .. vim.inspect(notes))
+  jobs[2].on_exit({ code = 0, stdout = "NEW", stderr = "" })
+  pump()
+  same(text_of(buf), { "heNEWllo" }, "newer paste")
+  check(#notes == 0, "newer paste notified " .. vim.inspect(notes))
+end)
+
+test("two pastes into an unchanged buffer both apply", function()
+  local buf = buffer({ "hello" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  press_paste_normal()
+  finish({ code = 0, stdout = "A", stderr = "" })
+  same(text_of(buf), { "heAllo" }, "first")
+  same(vim.api.nvim_win_get_cursor(0), { 1, 2 }, "cursor")
+  press_paste_normal()
+  finish({ code = 0, stdout = "B", stderr = "" })
+  same(text_of(buf), { "heABllo" }, "second")
+  same(vim.api.nvim_win_get_cursor(0), { 1, 3 }, "cursor after second")
+  check(#notes == 0, "notified " .. vim.inspect(notes))
+end)
+
+test("a stale paste does not report a changed buffer", function()
+  local buf = buffer({ "hello" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  press_paste_normal()
+  press_paste_normal()
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "hello!" })
+  jobs[1].on_exit({ code = 0, stdout = "OLD", stderr = "" })
+  pump()
+  same(text_of(buf), { "hello!" }, "stale paste inserted")
+  check(#notes == 0, "stale callback notified " .. vim.inspect(notes))
+  jobs[2].on_exit({ code = 0, stdout = "NEW", stderr = "" })
+  pump()
+  same(text_of(buf), { "hello!" }, "newer paste inserted")
+  same(notes, {
+    {
+      message = "The buffer changed during conversion. The result was not inserted.",
+      level = vim.log.levels.ERROR,
+    },
+  }, "changedtick")
+end)
+
+test("a newer copy cancels the previous request", function()
+  buffer({ "abcd" })
+  select_chars(1, 1, 2)
+  press_copy()
+  same(jobs[1].stdin, "bc", "first copy")
+  select_chars(1, 0, 0)
+  press_copy()
+  check(jobs[1].killed == true, "old copy was not killed")
+  check(jobs[1].signal == "sigterm", "signal")
+  jobs[1].on_exit({ code = 1, stdout = "", stderr = "old failure\n" })
+  pump()
+  check(#notes == 0, "stale copy notified " .. vim.inspect(notes))
+  same(jobs[2].stdin, "a", "second copy")
+  jobs[2].on_exit({ code = 0, stdout = "", stderr = "" })
+  pump()
+  check(#notes == 0, "newer copy notified " .. vim.inspect(notes))
+end)
+
+test("empty markdown leaves a visual selection unchanged", function()
+  local buf = buffer({ "abcd" })
+  select_chars(1, 1, 2)
+  press_paste_visual()
+  finish({ code = 0, stdout = "", stderr = "" })
+  same(text_of(buf), { "abcd" }, "characterwise deleted")
+  same(notes, {
+    {
+      message = "The converted Markdown is empty. The selection was left unchanged.",
+      level = vim.log.levels.ERROR,
+    },
+  }, "empty characterwise")
+  notes = {}
+  jobs = {}
+  buf = buffer({ "one", "two", "three" })
+  select_lines(2, 2)
+  press_paste_visual()
+  finish({ code = 0, stdout = "", stderr = "" })
+  same(text_of(buf), { "one", "two", "three" }, "linewise deleted")
+  same(notes, {
+    {
+      message = "The converted Markdown is empty. The selection was left unchanged.",
+      level = vim.log.levels.ERROR,
+    },
+  }, "empty linewise")
+end)
+
+test("empty markdown in normal mode does nothing", function()
+  local buf = buffer({ "hello" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  press_paste_normal()
+  finish({ code = 0, stdout = "", stderr = "" })
+  same(text_of(buf), { "hello" }, "changed")
+  same(vim.api.nvim_win_get_cursor(0), cursor, "cursor")
+  check(#notes == 0, "notified " .. vim.inspect(notes))
+end)
+
+test("normal paste leaves the cursor on the inserted text", function()
+  local emoji = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
+  local buf = buffer({ "a" .. emoji .. "b" })
+  vim.cmd("normal! l")
+  press_paste_normal()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "a" .. emoji .. "Zb" }, "after emoji")
+  same(vim.api.nvim_win_get_cursor(0), { 1, 19 }, "cursor")
 end)
 
 test("an empty process error uses the command name", function()

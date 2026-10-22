@@ -5,7 +5,6 @@
 local M = {}
 
 local BLOCKWISE = "\22"
-local MAXCOL = 2147483647
 
 local DEFAULTS = {
   command = "neovim.harness",
@@ -28,6 +27,11 @@ local installed = {
   paste_markdown = nil,
 }
 
+local generation = 0
+local active_job = nil
+
+local EMPTY_MARKDOWN = "The converted Markdown is empty. The selection was left unchanged."
+
 local function fail(message)
   vim.notify(message, vim.log.levels.ERROR)
 end
@@ -46,15 +50,8 @@ local function leave_visual()
   end
 end
 
-local function ordered(first, second)
-  if first[2] > second[2] or (first[2] == second[2] and first[3] > second[3]) then
-    return second, first
-  end
-  return first, second
-end
-
 -- '< and '> stay unset until visual mode ends, so a mapping reads v and the cursor.
-local function current_selection()
+local function selection_bounds()
   local kind = visual_mode_now()
   local first, last
   if kind ~= nil then
@@ -71,100 +68,147 @@ local function current_selection()
       return nil
     end
   end
-  local start_pos, end_pos = ordered(first, last)
   return {
     kind = kind,
     buf = vim.api.nvim_get_current_buf(),
-    start_row = start_pos[2],
-    start_col = start_pos[3],
-    end_row = end_pos[2],
-    end_col = end_pos[3],
+    first = first,
+    last = last,
   }
 end
 
-local function exclusive_col(line, col)
-  if col < 1 or col >= MAXCOL or col > #line then
-    return #line
-  end
-  return col + vim.str_utf_end(line, col)
-end
-
-local function selection_text(selection)
-  local buf = selection.buf
-  if selection.kind == "V" then
-    local lines = vim.api.nvim_buf_get_lines(buf, selection.start_row - 1, selection.end_row, true)
-    return table.concat(lines, "\n") .. "\n"
-  end
-  local end_line = vim.api.nvim_buf_get_lines(buf, selection.end_row - 1, selection.end_row, true)[1] or ""
-  local finish = exclusive_col(end_line, selection.end_col)
-  local parts = vim.api.nvim_buf_get_text(
-    buf,
-    selection.start_row - 1,
-    math.max(selection.start_col - 1, 0),
-    selection.end_row - 1,
-    finish,
-    {}
-  )
-  return table.concat(parts, "\n")
-end
-
-local function paste_region(selection)
-  if selection.kind == "V" then
-    return {
-      kind = "V",
-      buf = selection.buf,
-      start_row = selection.start_row - 1,
-      end_row = selection.end_row,
-    }
-  end
-  local end_line = vim.api.nvim_buf_get_lines(
-    selection.buf,
-    selection.end_row - 1,
-    selection.end_row,
-    true
-  )[1] or ""
-  return {
-    kind = "v",
-    buf = selection.buf,
-    start_row = selection.start_row - 1,
-    start_col = math.max(selection.start_col - 1, 0),
-    end_row = selection.end_row - 1,
-    end_col = exclusive_col(end_line, selection.end_col),
-  }
-end
-
-local function cursor_region()
-  local buf = vim.api.nvim_get_current_buf()
-  local cursor = vim.api.nvim_win_get_cursor(0)
-  local line = vim.api.nvim_buf_get_lines(buf, cursor[1] - 1, cursor[1], true)[1] or ""
-  local insert_col = #line
-  if cursor[2] < #line then
-    insert_col = exclusive_col(line, cursor[2] + 1)
-  end
-  return {
-    kind = "n",
-    buf = buf,
-    row = cursor[1] - 1,
-    col = insert_col,
-  }
-end
-
-local function command_targets_visual(opts)
-  if opts == nil or opts.range ~= 2 then
-    return false
-  end
+local function visual_line_span()
   local kind = vim.fn.visualmode()
   if kind ~= "v" and kind ~= "V" and kind ~= BLOCKWISE then
-    return false
+    return nil
   end
   local start_line = vim.fn.line("'<")
   local end_line = vim.fn.line("'>")
   if start_line == 0 or end_line == 0 then
+    return nil
+  end
+  return math.min(start_line, end_line), math.max(start_line, end_line)
+end
+
+-- :1,1 and :'<,'> both arrive as range 2 on the same lines, so that case keeps
+-- the visual selection. A single address is always the whole line.
+local function line_range_requested(opts)
+  if visual_mode_now() ~= nil then
     return false
   end
-  local low = math.min(start_line, end_line)
-  local high = math.max(start_line, end_line)
+  if type(opts) ~= "table" or type(opts.range) ~= "number" or opts.range < 1 then
+    return false
+  end
+  if opts.range == 1 then
+    return true
+  end
+  local low, high = visual_line_span()
+  if low == nil then
+    return true
+  end
+  return opts.line1 ~= low or opts.line2 ~= high
+end
+
+local function visual_range_matches(opts)
+  if visual_mode_now() ~= nil or type(opts) ~= "table" or opts.range ~= 2 then
+    return false
+  end
+  local low, high = visual_line_span()
+  if low == nil then
+    return false
+  end
   return opts.line1 == low and opts.line2 == high
+end
+
+local function region_text(bounds)
+  local lines = vim.fn.getregion(bounds.first, bounds.last, { type = bounds.kind })
+  if type(lines) ~= "table" then
+    error("Could not read the selection.")
+  end
+  local text = table.concat(lines, "\n")
+  if bounds.kind == "V" then
+    text = text .. "\n"
+  end
+  return text
+end
+
+local function line_text(buf, lnum)
+  return vim.api.nvim_buf_get_lines(buf, lnum - 1, lnum, true)[1] or ""
+end
+
+-- getregionpos columns are 1-based. With off == 0 the end column is the last
+-- included byte. A column past the line is a virtualedit tail or EOL.
+local function byte_end(line, pos)
+  local col = pos[3]
+  if col > #line then
+    return #line
+  end
+  if col < 1 then
+    return 0
+  end
+  if pos[4] ~= 0 then
+    local last = col + vim.str_utf_end(line, col)
+    if last > #line then
+      return #line
+    end
+    return last
+  end
+  return col
+end
+
+local function byte_start(line, pos)
+  local col = pos[3]
+  if col > #line then
+    return #line
+  end
+  if col < 1 then
+    return 0
+  end
+  return col - 1
+end
+
+local function paste_region_from(bounds)
+  local segments = vim.fn.getregionpos(bounds.first, bounds.last, {
+    type = bounds.kind,
+    eol = true,
+  })
+  if type(segments) ~= "table" or segments[1] == nil then
+    error("Could not read the selection.")
+  end
+  local start_pos = segments[1][1]
+  local end_pos = segments[#segments][2]
+  if bounds.kind == "V" then
+    return {
+      kind = "V",
+      buf = bounds.buf,
+      start_row = start_pos[2] - 1,
+      end_row = end_pos[2],
+    }
+  end
+  return {
+    kind = "v",
+    buf = bounds.buf,
+    start_row = start_pos[2] - 1,
+    start_col = byte_start(line_text(bounds.buf, start_pos[2]), start_pos),
+    end_row = end_pos[2] - 1,
+    end_col = byte_end(line_text(bounds.buf, end_pos[2]), end_pos),
+  }
+end
+
+local function cursor_region()
+  local pos = vim.fn.getpos(".")
+  local buf = vim.api.nvim_get_current_buf()
+  local line = line_text(buf, pos[2])
+  local segments = vim.fn.getregionpos(pos, pos, { type = "v", eol = true })
+  local col = #line
+  if type(segments) == "table" and segments[1] ~= nil then
+    col = byte_end(line, segments[1][2])
+  end
+  return {
+    kind = "n",
+    buf = buf,
+    row = pos[2] - 1,
+    col = col,
+  }
 end
 
 local function process_error(result)
@@ -190,12 +234,42 @@ local function linewise_replacement(text)
   return lines
 end
 
+local function place_cursor(buf, row, col)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, true)[1] or ""
+  if col > #line then
+    col = #line
+  end
+  if col < 0 then
+    col = 0
+  end
+  if vim.api.nvim_get_current_buf() == buf then
+    vim.api.nvim_win_set_cursor(0, { row, col })
+    return
+  end
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      vim.api.nvim_win_set_cursor(win, { row, col })
+      return
+    end
+  end
+end
+
 local function insert_markdown(region, text)
   if region.kind == "n" then
     if text == "" then
       return
     end
-    vim.api.nvim_buf_set_text(region.buf, region.row, region.col, region.row, region.col, split_lines(text))
+    local lines = split_lines(text)
+    vim.api.nvim_buf_set_text(region.buf, region.row, region.col, region.row, region.col, lines)
+    local first = lines[1] or ""
+    local col = region.col
+    if #first > 0 then
+      col = region.col + (#first - 1) + vim.str_utf_start(first, #first)
+    end
+    place_cursor(region.buf, region.row + 1, col)
     return
   end
   if region.kind == "V" then
@@ -231,85 +305,163 @@ local function finish_paste(region, result)
     fail("The buffer changed during conversion. The result was not inserted.")
     return
   end
-  local applied, apply_error = pcall(insert_markdown, region, result.stdout or "")
+  local text = result.stdout or ""
+  if text == "" and region.kind ~= "n" then
+    fail(EMPTY_MARKDOWN)
+    return
+  end
+  local applied, apply_error = pcall(insert_markdown, region, text)
   if not applied then
     fail("Could not insert Markdown: " .. tostring(apply_error))
   end
 end
 
-local function start_process(args, stdin, on_result)
+local function supersede()
+  generation = generation + 1
+  local id = generation
+  local job = active_job
+  active_job = nil
+  if type(job) == "table" and type(job.kill) == "function" then
+    pcall(job.kill, job, "sigterm")
+  end
+  return id
+end
+
+local function start_process(id, args, stdin, on_result)
   local system_opts = { text = true }
   if stdin ~= nil then
     system_opts.stdin = stdin
   end
-  local started = pcall(vim.system, args, system_opts, function(result)
-    vim.schedule(function()
-      on_result(result)
+  local job
+  local ok = pcall(function()
+    job = vim.system(args, system_opts, function(result)
+      vim.schedule(function()
+        if id ~= generation then
+          return
+        end
+        if active_job == job then
+          active_job = nil
+        end
+        on_result(result)
+      end)
     end)
   end)
-  if not started then
+  if not ok or job == nil then
     vim.schedule(function()
+      if id ~= generation then
+        return
+      end
       fail(config.command .. " is not available.")
     end)
+    return
   end
+  if id ~= generation then
+    if type(job.kill) == "function" then
+      pcall(job.kill, job, "sigterm")
+    end
+    return
+  end
+  active_job = job
 end
 
-local function refuse_blockwise(selection)
-  if selection ~= nil and selection.kind == BLOCKWISE then
-    leave_visual()
-    fail("Blockwise selection cannot be converted.")
-    return true
-  end
-  return false
-end
-
-function M.copy_html()
-  local selection = current_selection()
-  if selection == nil then
-    fail("Select text before copying it as HTML.")
-    return
-  end
-  if refuse_blockwise(selection) then
-    return
-  end
-  local read_ok, text = pcall(selection_text, selection)
-  leave_visual()
-  if not read_ok then
-    fail("Could not read the selection.")
-    return
-  end
-  start_process({ config.command, "--markdown-to-clipboard" }, text, function(result)
+local function launch_copy(text)
+  local id = supersede()
+  start_process(id, { config.command, "--markdown-to-clipboard" }, text, function(result)
     if type(result) ~= "table" or result.code ~= 0 then
       fail(process_error(result))
     end
   end)
 end
 
-function M.paste_markdown(opts)
-  local selection = nil
-  if visual_mode_now() ~= nil or command_targets_visual(opts) then
-    selection = current_selection()
-  end
-  if refuse_blockwise(selection) then
-    return
-  end
-  local region
-  if selection ~= nil then
-    local captured, value = pcall(paste_region, selection)
-    if not captured then
-      leave_visual()
-      fail("Could not read the selection.")
-      return
-    end
-    region = value
-  else
-    region = cursor_region()
-  end
+local function launch_paste(region)
   leave_visual()
+  local id = supersede()
   region.tick = vim.api.nvim_buf_get_changedtick(region.buf)
-  start_process({ config.command, "--clipboard-to-markdown" }, nil, function(result)
+  start_process(id, { config.command, "--clipboard-to-markdown" }, nil, function(result)
     finish_paste(region, result)
   end)
+end
+
+local function copy_line_range(line1, line2)
+  local buf = vim.api.nvim_get_current_buf()
+  local ok, text = pcall(function()
+    local lines = vim.api.nvim_buf_get_lines(buf, line1 - 1, line2, true)
+    if #lines == 0 then
+      return ""
+    end
+    return table.concat(lines, "\n") .. "\n"
+  end)
+  if not ok then
+    fail("Could not read the selection.")
+    return
+  end
+  launch_copy(text)
+end
+
+local function copy_visual()
+  local bounds = selection_bounds()
+  if bounds == nil then
+    fail("Select text before copying it as HTML.")
+    return
+  end
+  if bounds.kind == BLOCKWISE then
+    leave_visual()
+    fail("Blockwise selection cannot be converted.")
+    return
+  end
+  local read_ok, text = pcall(region_text, bounds)
+  leave_visual()
+  if not read_ok then
+    fail("Could not read the selection.")
+    return
+  end
+  launch_copy(text)
+end
+
+function M.copy_html(opts)
+  if line_range_requested(opts) then
+    copy_line_range(opts.line1, opts.line2)
+    return
+  end
+  copy_visual()
+end
+
+local function paste_visual()
+  local bounds = selection_bounds()
+  if bounds == nil then
+    leave_visual()
+    fail("Could not read the selection.")
+    return
+  end
+  if bounds.kind == BLOCKWISE then
+    leave_visual()
+    fail("Blockwise selection cannot be converted.")
+    return
+  end
+  local captured, region = pcall(paste_region_from, bounds)
+  if not captured then
+    leave_visual()
+    fail("Could not read the selection.")
+    return
+  end
+  launch_paste(region)
+end
+
+function M.paste_markdown(opts)
+  if line_range_requested(opts) then
+    launch_paste({
+      kind = "V",
+      buf = vim.api.nvim_get_current_buf(),
+      start_row = opts.line1 - 1,
+      end_row = opts.line2,
+    })
+    return
+  end
+  if visual_mode_now() ~= nil or visual_range_matches(opts) then
+    paste_visual()
+    return
+  end
+  launch_paste(cursor_region())
 end
 
 local function mapping_enabled(lhs)

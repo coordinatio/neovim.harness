@@ -5,21 +5,56 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
-
-import cssutils
-from lxml import html as lxml_html
-from premailer import transform as premailer_transform
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
-# premailer uses cssutils, which warns on modern CSS.
-cssutils.log.setLevel(logging.CRITICAL)
+PANDOC_TIMEOUT_SECONDS = 30
 
 _PANDOC_FAILURES = (
     subprocess.CalledProcessError,
     FileNotFoundError,
     UnicodeDecodeError,
 )
+
+
+class _LazyModule:
+    """Import a module on first attribute access. Tests replace attributes on this object."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._module: object | None = None
+
+    def _load(self) -> object:
+        if self._module is None:
+            if self._name == "cssutils":
+                import cssutils as loaded
+            else:
+                from lxml import html as loaded
+            self._module = loaded
+        return self._module
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._load(), name)
+
+
+class _CallsPremailer(Protocol):
+    def __call__(self, html: str, remove_classes: bool = False) -> str: ...
+
+
+class _LazyPremailer:
+    """Resolve premailer.transform when Markdown is converted to HTML."""
+
+    def __call__(self, html: str, remove_classes: bool = False) -> str:
+        from premailer import transform as premailer_transform
+
+        return premailer_transform(html, remove_classes=remove_classes)
+
+
+# Names stay on this module so tests can replace them. Import does not load them.
+cssutils = _LazyModule("cssutils")
+lxml_html = _LazyModule("lxml.html")
+premailer_transform: _CallsPremailer = _LazyPremailer()
 
 
 def _pandoc_failure_detail(exc: Exception) -> str:
@@ -66,8 +101,11 @@ class HtmlToMarkdown:
                 input=html_content,
                 capture_output=True,
                 check=True,
+                timeout=PANDOC_TIMEOUT_SECONDS,
             )
             return result.stdout.decode("utf-8")
+        except subprocess.TimeoutExpired as exc:
+            raise ConversionError("Timed out waiting for pandoc.") from exc
         except _PANDOC_FAILURES as exc:
             raise ConversionError(
                 f"Pandoc html_to_gfm failed: {_pandoc_failure_detail(exc)}"
@@ -102,8 +140,11 @@ class MarkdownToHtml:
                 input=markdown_content.encode("utf-8"),
                 capture_output=True,
                 check=True,
+                timeout=PANDOC_TIMEOUT_SECONDS,
             )
             raw_html = proc.stdout.decode("utf-8")
+        except subprocess.TimeoutExpired as exc:
+            raise ConversionError("Timed out waiting for pandoc.") from exc
         except _PANDOC_FAILURES as exc:
             raise ConversionError(
                 f"Pandoc failed: {_pandoc_failure_detail(exc)}"

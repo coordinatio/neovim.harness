@@ -78,6 +78,7 @@ def _install(
         raise AssertionError("full environment check")
 
     monkeypatch.setattr("neovim_harness.cli.collect_conversion_failures", lambda: [])
+    monkeypatch.setattr("neovim_harness.cli.collect_html_to_markdown_failures", lambda: [])
     monkeypatch.setattr("neovim_harness.cli.collect_failures", forbid_full_check)
     monkeypatch.setattr("neovim_harness.sessions.SessionStore", forbid_session)
     monkeypatch.setattr("neovim_harness.clipboard.WaylandClipboard", lambda: clipboard)
@@ -233,10 +234,52 @@ def test_conversion_check_failure_stays_on_stderr(
     def forbid_clipboard() -> None:
         raise AssertionError("clipboard opened")
 
-    monkeypatch.setattr("neovim_harness.cli.collect_conversion_failures", lambda: [failure])
+    def forbid_styled_check() -> list[RequirementFailure]:
+        raise AssertionError("styled html check")
+
+    monkeypatch.setattr(
+        "neovim_harness.cli.collect_html_to_markdown_failures",
+        lambda: [failure],
+    )
+    monkeypatch.setattr(
+        "neovim_harness.cli.collect_conversion_failures",
+        forbid_styled_check,
+    )
     monkeypatch.setattr("neovim_harness.clipboard.WaylandClipboard", forbid_clipboard)
     with pytest.raises(SystemExit) as caught:
         main(["--clipboard-to-markdown"])
+    assert caught.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == format_report([failure])
+
+
+def test_markdown_to_clipboard_uses_the_styled_html_check(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    failure = RequirementFailure(
+        "lxml",
+        "The lxml module cannot be imported.\nInstall the python-lxml package.",
+    )
+
+    def forbid_html_check() -> list[RequirementFailure]:
+        raise AssertionError("html to markdown check")
+
+    def forbid_clipboard() -> None:
+        raise AssertionError("clipboard opened")
+
+    monkeypatch.setattr(
+        "neovim_harness.cli.collect_conversion_failures",
+        lambda: [failure],
+    )
+    monkeypatch.setattr(
+        "neovim_harness.cli.collect_html_to_markdown_failures",
+        forbid_html_check,
+    )
+    monkeypatch.setattr("neovim_harness.clipboard.WaylandClipboard", forbid_clipboard)
+    with pytest.raises(SystemExit) as caught:
+        main(["--markdown-to-clipboard"])
     assert caught.value.code == 1
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -253,6 +296,10 @@ def test_check_environment_stays_the_full_check_with_a_helper_flag(
     monkeypatch.setattr("neovim_harness.cli.collect_failures", lambda: [])
     monkeypatch.setattr(
         "neovim_harness.cli.collect_conversion_failures",
+        forbid_conversion_check,
+    )
+    monkeypatch.setattr(
+        "neovim_harness.cli.collect_html_to_markdown_failures",
         forbid_conversion_check,
     )
     with pytest.raises(SystemExit) as caught:

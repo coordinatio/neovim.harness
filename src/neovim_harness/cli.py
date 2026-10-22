@@ -16,6 +16,7 @@ from neovim_harness.environment import (
     SUCCESS_TEXT,
     collect_conversion_failures,
     collect_failures,
+    collect_html_to_markdown_failures,
     format_report,
 )
 from neovim_harness.modes import (
@@ -149,7 +150,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             raise SystemExit(0)
         _run(args.mode)
         return
-    failures = collect_conversion_failures()
+    if args.mode == "clipboard-to-markdown":
+        failures = collect_html_to_markdown_failures()
+    else:
+        failures = collect_conversion_failures()
     if failures:
         _fail(format_report(failures))
     _run_conversion(args.mode)

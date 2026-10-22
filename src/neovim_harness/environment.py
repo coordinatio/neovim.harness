@@ -38,7 +38,7 @@ def collect_failures() -> list[RequirementFailure]:
 
 
 def collect_conversion_failures() -> list[RequirementFailure]:
-    """Requirements for the headless HTML and Markdown commands."""
+    """Requirements for writing styled clipboard HTML."""
     return _collect(
         (
             check_pandoc,
@@ -46,6 +46,18 @@ def collect_conversion_failures() -> list[RequirementFailure]:
             check_lxml,
             check_premailer,
             check_cssutils,
+            check_wayland_session,
+            check_conversion_assets,
+        )
+    )
+
+
+def collect_html_to_markdown_failures() -> list[RequirementFailure]:
+    """Requirements for reading clipboard HTML and writing Markdown."""
+    return _collect(
+        (
+            check_pandoc,
+            check_wayland_clipboard,
             check_wayland_session,
             check_conversion_assets,
         )

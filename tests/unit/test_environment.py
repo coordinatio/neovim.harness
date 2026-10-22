@@ -21,6 +21,7 @@ from neovim_harness.environment import (
     check_wayland_session,
     collect_conversion_failures,
     collect_failures,
+    collect_html_to_markdown_failures,
     format_report,
 )
 
@@ -351,3 +352,63 @@ def test_conversion_check_lists_only_the_helper_requirements(
         _WAYLAND,
         _CONVERSION_ASSETS,
     ]
+
+
+def test_html_to_markdown_check_ignores_styled_html_libraries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    lua = tmp_path / "backics.lua"
+    css = tmp_path / "github-pandoc.css"
+    lua.write_text("lua", encoding="utf-8")
+    css.write_text("css", encoding="utf-8")
+
+    class Paths:
+        lua_filter = lua
+        stylesheet = css
+
+    monkeypatch.setattr(
+        "neovim_harness.environment.shutil.which",
+        lambda command: f"/usr/bin/{command}",
+    )
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setattr(
+        "neovim_harness.environment.ConversionAssets.load",
+        classmethod(lambda cls: Paths()),
+    )
+    for name in ("lxml", "premailer", "cssutils"):
+        monkeypatch.setitem(sys.modules, name, None)
+    assert collect_html_to_markdown_failures() == []
+
+
+def test_html_to_markdown_check_lists_only_its_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("neovim_harness.environment.shutil.which", lambda command: None)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    for name in ("lxml", "premailer", "cssutils"):
+        monkeypatch.setitem(sys.modules, name, None)
+
+    def explode(cls: object) -> None:
+        raise FileNotFoundError("missing assets")
+
+    monkeypatch.setattr(
+        "neovim_harness.environment.ConversionAssets.load",
+        classmethod(explode),
+    )
+    failures = collect_html_to_markdown_failures()
+    assert [failure.title for failure in failures] == [
+        "pandoc",
+        "Wayland clipboard",
+        "Wayland session",
+        "Assets",
+    ]
+    assert [failure.paragraph for failure in failures] == [
+        _PANDOC,
+        _WL_BOTH,
+        _WAYLAND,
+        _CONVERSION_ASSETS,
+    ]
+    assert "lxml" not in [failure.title for failure in failures]
+    assert "premailer" not in [failure.title for failure in failures]
+    assert "cssutils" not in [failure.title for failure in failures]
