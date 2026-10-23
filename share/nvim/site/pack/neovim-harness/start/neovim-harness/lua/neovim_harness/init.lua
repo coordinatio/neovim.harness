@@ -221,8 +221,11 @@ local function charwise_end(bounds, end_pos)
   if vim.o.selection ~= "old" then
     return after_break(buf, raw[2])
   end
-  -- "old" does not allow a position past the line end, so that position
-  -- names the last byte of the previous row.
+  -- "old" leaves the break out. A non-empty row ends with its last real byte.
+  if #text > 0 then
+    return raw[2] - 1, #text
+  end
+  -- On an empty row the position names the last byte of the previous row.
   if raw[2] < 2 then
     return 0, 0
   end

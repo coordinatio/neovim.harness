@@ -732,6 +732,19 @@ test("an old selection from a virtualedit position keeps the span", function()
   check(#notes == 0, "notified " .. vim.inspect(notes))
 end)
 
+test("an old selection past the line end stops at the last byte", function()
+  vim.o.virtualedit = "onemore"
+  vim.o.selection = "old"
+  local buf = buffer({ "ab", "cd" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.cmd("normal! v")
+  vim.cmd("normal! l")
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "aZ", "cd" }, "old onemore paste")
+  check(#notes == 0, "notified " .. vim.inspect(notes))
+end)
+
 test("a single address copies that line", function()
   buffer({ "abcd", "efgh" })
   select_chars(1, 1, 2)
