@@ -32,6 +32,7 @@ from neovim_harness.modes import (
 from neovim_harness.workspace import OpensWorkspace
 
 _CONVERSION_MODES = frozenset({"clipboard-to-markdown", "markdown-to-clipboard"})
+_PROCESS_GROUP_ENV = "NEOVIM_HARNESS_PROCESS_GROUP"
 
 _MODES = {
     "new-plain": NewPlainText,
@@ -199,7 +200,21 @@ def _run(mode_name: str) -> None:
     app.run()
 
 
+def _lead_helper_process_group() -> None:
+    """Lead a process group only when the Neovim plugin launched this helper.
+
+    vim.system kill signals one pid. Pandoc and wl-paste/wl-copy are children
+    of this process, so they keep running unless the plugin can signal the
+    group. In-process callers, including unit tests that call main(), do not
+    set NEOVIM_HARNESS_PROCESS_GROUP and must not call setpgrp.
+    """
+    if os.environ.get(_PROCESS_GROUP_ENV) != "1":
+        return
+    os.setpgrp()
+
+
 def _run_conversion(mode_name: str) -> None:
+    _lead_helper_process_group()
     # Converters import optional packages. Load them only after the check passes.
     from neovim_harness.assets import ConversionAssets
     from neovim_harness.clipboard import ClipboardError, WaylandClipboard

@@ -72,18 +72,46 @@ class ConversionError(Exception):
     """Pandoc could not convert the document."""
 
 
+def _run_pandoc(
+    command: list[str],
+    payload: bytes,
+    *,
+    timeout: float | None,
+) -> subprocess.CompletedProcess[bytes]:
+    if timeout is None:
+        return subprocess.run(
+            command,
+            input=payload,
+            capture_output=True,
+            check=True,
+        )
+    return subprocess.run(
+        command,
+        input=payload,
+        capture_output=True,
+        check=True,
+        timeout=timeout,
+    )
+
+
 class HtmlToMarkdown:
     def __init__(self, lua_filter: Path) -> None:
         self._lua_filter = lua_filter
 
     def convert(self, html_content: bytes) -> str:
         try:
-            return self.convert_strict(html_content)
+            return self._convert(html_content, timeout=None)
         except ConversionError as exc:
             logger.error("%s", exc)
             return ""
 
     def convert_strict(self, html_content: bytes) -> str:
+        try:
+            return self._convert(html_content, timeout=PANDOC_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            raise ConversionError("Timed out waiting for pandoc.") from exc
+
+    def _convert(self, html_content: bytes, *, timeout: float | None) -> str:
         if not html_content:
             return ""
         command = [
@@ -96,16 +124,8 @@ class HtmlToMarkdown:
             f"--lua-filter={self._lua_filter}",
         ]
         try:
-            result = subprocess.run(
-                command,
-                input=html_content,
-                capture_output=True,
-                check=True,
-                timeout=PANDOC_TIMEOUT_SECONDS,
-            )
+            result = _run_pandoc(command, html_content, timeout=timeout)
             return result.stdout.decode("utf-8")
-        except subprocess.TimeoutExpired as exc:
-            raise ConversionError("Timed out waiting for pandoc.") from exc
         except _PANDOC_FAILURES as exc:
             raise ConversionError(
                 f"Pandoc html_to_gfm failed: {_pandoc_failure_detail(exc)}"
@@ -118,12 +138,18 @@ class MarkdownToHtml:
 
     def convert(self, markdown_content: str) -> str:
         try:
-            return self.convert_strict(markdown_content)
+            return self._convert(markdown_content, timeout=None)
         except ConversionError as exc:
             logger.error("%s", exc)
             return ""
 
     def convert_strict(self, markdown_content: str) -> str:
+        try:
+            return self._convert(markdown_content, timeout=PANDOC_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            raise ConversionError("Timed out waiting for pandoc.") from exc
+
+    def _convert(self, markdown_content: str, *, timeout: float | None) -> str:
         cssutils.log.setLevel(logging.CRITICAL)
         command = [
             "pandoc",
@@ -135,16 +161,12 @@ class MarkdownToHtml:
             "--standalone",
         ]
         try:
-            proc = subprocess.run(
+            proc = _run_pandoc(
                 command,
-                input=markdown_content.encode("utf-8"),
-                capture_output=True,
-                check=True,
-                timeout=PANDOC_TIMEOUT_SECONDS,
+                markdown_content.encode("utf-8"),
+                timeout=timeout,
             )
             raw_html = proc.stdout.decode("utf-8")
-        except subprocess.TimeoutExpired as exc:
-            raise ConversionError("Timed out waiting for pandoc.") from exc
         except _PANDOC_FAILURES as exc:
             raise ConversionError(
                 f"Pandoc failed: {_pandoc_failure_detail(exc)}"

@@ -46,8 +46,8 @@ def test_read_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     assert plain[0][0] == ["wl-paste", "--no-newline"]
     assert html[0][0] == ["wl-paste", "--no-newline", "-t", "text/html"]
     assert plain[1]["capture_output"] is True
-    assert plain[1]["timeout"] == 30
-    assert html[1]["timeout"] == 30
+    assert "timeout" not in plain[1]
+    assert "timeout" not in html[1]
     assert "check" not in plain[1]
     assert "check" not in html[1]
 
@@ -196,12 +196,16 @@ def test_read_required_accepts_text_stderr(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
 
-def test_read_timeout_returns_empty_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_does_not_turn_a_timeout_into_an_empty_clipboard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fake_run(*args: object, **kwargs: object) -> None:
-        raise subprocess.TimeoutExpired(args[0], 30)
+        assert "timeout" not in kwargs
+        raise subprocess.TimeoutExpired(args[0], None)
 
     monkeypatch.setattr("neovim_harness.clipboard.subprocess.run", fake_run)
-    assert WaylandClipboard().read(mimetype="text/html") == b""
+    with pytest.raises(subprocess.TimeoutExpired):
+        WaylandClipboard().read(mimetype="text/html")
 
 
 def test_read_required_timeout(monkeypatch: pytest.MonkeyPatch) -> None:

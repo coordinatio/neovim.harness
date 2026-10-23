@@ -238,20 +238,55 @@ local function place_cursor(buf, row, col)
   if not vim.api.nvim_buf_is_valid(buf) then
     return
   end
-  local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, true)[1] or ""
-  if col > #line then
-    col = #line
-  end
-  if col < 0 then
-    col = 0
+  local function apply()
+    local line = vim.api.nvim_buf_get_lines(buf, row - 1, row, true)[1] or ""
+    if col > #line then
+      col = #line
+    end
+    if col < 0 then
+      col = 0
+    end
+    vim.api.nvim_win_set_cursor(0, { row, col })
+    if col > 0 then
+      local saved_whichwrap = vim.o.whichwrap
+      vim.o.whichwrap = ""
+      local ok, snapped = pcall(function()
+        -- `h` inside a grapheme moves to its first byte. `h` on a grapheme
+        -- boundary moves to the previous character, so keep the move only
+        -- when that character still covers the original column.
+        vim.cmd("noautocmd keepjumps normal! h")
+        local left = vim.api.nvim_win_get_cursor(0)
+        if left[1] ~= row or left[2] >= col then
+          return col
+        end
+        local segs = vim.fn.getregionpos(
+          vim.fn.getpos("."),
+          vim.fn.getpos("."),
+          { type = "v", eol = true }
+        )
+        if type(segs) ~= "table" or segs[1] == nil or segs[1][2] == nil then
+          return col
+        end
+        local last_byte = segs[1][2][3]
+        if type(last_byte) ~= "number" or col > last_byte - 1 then
+          return col
+        end
+        return left[2]
+      end)
+      vim.o.whichwrap = saved_whichwrap
+      if ok and type(snapped) == "number" then
+        col = snapped
+      end
+    end
+    vim.api.nvim_win_set_cursor(0, { row, col })
   end
   if vim.api.nvim_get_current_buf() == buf then
-    vim.api.nvim_win_set_cursor(0, { row, col })
+    apply()
     return
   end
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_get_buf(win) == buf then
-      vim.api.nvim_win_set_cursor(win, { row, col })
+      vim.api.nvim_win_call(win, apply)
       return
     end
   end
@@ -292,6 +327,19 @@ local function insert_markdown(region, text)
   )
 end
 
+local function without_document_terminator(text)
+  -- Pandoc ends a document with a newline. A hard break is a backslash or two
+  -- spaces at the end of the line that newline closes; that newline stays.
+  if text:sub(-1) ~= "\n" then
+    return text
+  end
+  local segment = text:sub(1, -2):match("[^\n]*$") or ""
+  if segment:sub(-1) == "\\" or segment:sub(-2) == "  " then
+    return text
+  end
+  return text:sub(1, -2)
+end
+
 local function finish_paste(region, result)
   if type(result) ~= "table" or result.code ~= 0 then
     fail(process_error(result))
@@ -305,7 +353,7 @@ local function finish_paste(region, result)
     fail("The buffer changed during conversion. The result was not inserted.")
     return
   end
-  local text = result.stdout or ""
+  local text = without_document_terminator(result.stdout or "")
   if text == "" and region.kind ~= "n" then
     fail(EMPTY_MARKDOWN)
     return
@@ -316,19 +364,41 @@ local function finish_paste(region, result)
   end
 end
 
+local function stop_job(job)
+  if type(job) ~= "table" then
+    return
+  end
+  local pid = job.pid
+  -- Negating the pid signals its process group. Pid 1 would become -1, and
+  -- kill(-1) signals every process this user may signal. Only a pid above 1
+  -- is a helper group.
+  if type(pid) == "number" and pid > 1 then
+    -- The helper is the process-group leader. A negative pid signals the
+    -- group, including pandoc and wl-paste/wl-copy. job:kill signals one pid.
+    local called, signaled = pcall(vim.uv.kill, -pid, "sigterm")
+    if called and signaled ~= nil then
+      return
+    end
+  end
+  if type(job.kill) == "function" then
+    pcall(job.kill, job, "sigterm")
+  end
+end
+
 local function supersede()
   generation = generation + 1
   local id = generation
   local job = active_job
   active_job = nil
-  if type(job) == "table" and type(job.kill) == "function" then
-    pcall(job.kill, job, "sigterm")
-  end
+  stop_job(job)
   return id
 end
 
 local function start_process(id, args, stdin, on_result)
-  local system_opts = { text = true }
+  local system_opts = {
+    text = true,
+    env = { NEOVIM_HARNESS_PROCESS_GROUP = "1" },
+  }
   if stdin ~= nil then
     system_opts.stdin = stdin
   end
@@ -356,9 +426,7 @@ local function start_process(id, args, stdin, on_result)
     return
   end
   if id ~= generation then
-    if type(job.kill) == "function" then
-      pcall(job.kill, job, "sigterm")
-    end
+    stop_job(job)
     return
   end
   active_job = job

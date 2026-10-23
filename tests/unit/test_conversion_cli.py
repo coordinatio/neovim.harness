@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import io
+import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
-from neovim_harness.cli import main
+from neovim_harness.cli import _PROCESS_GROUP_ENV, _lead_helper_process_group, main
 from neovim_harness.clipboard import ClipboardError
 from neovim_harness.convert import ConversionError
 from neovim_harness.environment import SUCCESS_TEXT, RequirementFailure, format_report
@@ -306,3 +309,120 @@ def test_check_environment_stays_the_full_check_with_a_helper_flag(
         main(["--markdown-to-clipboard", "--check-environment"])
     assert caught.value.code == 0
     assert capsys.readouterr().out == f"{SUCCESS_TEXT}\n"
+
+
+def test_in_process_main_does_not_lead_a_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[str] = []
+    monkeypatch.delenv(_PROCESS_GROUP_ENV, raising=False)
+    monkeypatch.setattr("neovim_harness.cli.os.setpgrp", lambda: calls.append("setpgrp"))
+    clipboard = _Clipboard()
+    html = _Result("héllo\n")
+    markdown = _Result("<p>unused</p>")
+    _install(monkeypatch, clipboard, html, markdown)
+    before = os.getpgrp()
+    main(["--clipboard-to-markdown"])
+    assert calls == []
+    assert os.getpgrp() == before
+    assert capsys.readouterr().out == "héllo\n"
+
+
+def test_plugin_env_makes_the_helper_lead_a_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr("neovim_harness.cli.os.setpgrp", lambda: calls.append("setpgrp"))
+    monkeypatch.delenv(_PROCESS_GROUP_ENV, raising=False)
+    _lead_helper_process_group()
+    assert calls == []
+    monkeypatch.setenv(_PROCESS_GROUP_ENV, "1")
+    _lead_helper_process_group()
+    assert calls == ["setpgrp"]
+    clipboard = _Clipboard()
+    html = _Result("héllo\n")
+    markdown = _Result("<p>unused</p>")
+    _install(monkeypatch, clipboard, html, markdown)
+    before = os.getpgrp()
+    main(["--clipboard-to-markdown"])
+    assert calls == ["setpgrp", "setpgrp"]
+    assert os.getpgrp() == before
+
+
+def _wait_until_gone(pid: int) -> None:
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"process {pid} is still running")
+
+
+def test_signaling_the_helper_group_stops_its_child() -> None:
+    before = os.getpgrp()
+    previous = os.environ.pop(_PROCESS_GROUP_ENV, None)
+    try:
+        _lead_helper_process_group()
+        assert os.getpgrp() == before
+    finally:
+        if previous is not None:
+            os.environ[_PROCESS_GROUP_ENV] = previous
+    root = Path(__file__).resolve().parents[2]
+    script = f"""
+import os
+import subprocess
+import time
+os.environ[{_PROCESS_GROUP_ENV!r}] = "1"
+from neovim_harness.cli import _lead_helper_process_group
+_lead_helper_process_group()
+child = subprocess.Popen(["sleep", "30"])
+print(os.getpid(), child.pid, os.getpgrp(), flush=True)
+time.sleep(30)
+"""
+    env = os.environ.copy()
+    env.pop(_PROCESS_GROUP_ENV, None)
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(root / "src"), env.get("PYTHONPATH", "")) if part
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    leader: int | None = None
+    child: int | None = None
+    try:
+        assert proc.stdout is not None
+        line = proc.stdout.readline()
+        if not line:
+            error = proc.stderr.read() if proc.stderr is not None else ""
+            raise AssertionError(error)
+        leader, child, group = (int(part) for part in line.split())
+        assert group == leader
+        assert leader > 1
+        assert child > 1
+        assert leader != before
+        os.kill(-leader, signal.SIGTERM)
+        proc.wait(timeout=5)
+        _wait_until_gone(child)
+        _wait_until_gone(leader)
+    finally:
+        if leader is not None and leader > 1:
+            try:
+                os.kill(-leader, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=5)
+        if child is not None and child > 1:
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    assert os.getpgrp() == before

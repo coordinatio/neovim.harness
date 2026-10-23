@@ -36,6 +36,7 @@ local function install_system()
       cmd = vim.deepcopy(cmd),
       stdin = opts and opts.stdin,
       text = opts and opts.text,
+      env = opts and opts.env,
       shell = opts and opts.shell,
       on_exit = on_exit,
       killed = false,
@@ -52,6 +53,7 @@ end
 install_system()
 
 local mod = require("neovim_harness")
+local original_kill = vim.uv.kill
 
 local function pump()
   local done = false
@@ -89,6 +91,7 @@ local function test(name, fn)
   begin()
   local ok, err = xpcall(fn, debug.traceback)
   vim.fn.has = original_has
+  vim.uv.kill = original_kill
   install_system()
   local restored, restore_error = pcall(mod.setup)
   if not ok then
@@ -350,6 +353,109 @@ test("normal paste keeps a multiline result in one undo", function()
   same(text_of(buf), { "hello" }, "undo")
 end)
 
+test("a document terminator does not split normal or characterwise paste", function()
+  local cases = {
+    {
+      stdout = "hello\n",
+      normal = { "abhellocd" },
+      visual = { "ahellocd" },
+    },
+    {
+      stdout = "hello\n\nworld\n",
+      normal = { "abhello", "", "worldcd" },
+      visual = { "ahello", "", "worldcd" },
+    },
+    {
+      stdout = "hello\\\nworld\n",
+      normal = { "abhello\\", "worldcd" },
+      visual = { "ahello\\", "worldcd" },
+    },
+    {
+      stdout = "hello  \nworld\n",
+      normal = { "abhello  ", "worldcd" },
+      visual = { "ahello  ", "worldcd" },
+    },
+    {
+      stdout = "hello  \n",
+      normal = { "abhello  ", "cd" },
+      visual = { "ahello  ", "cd" },
+    },
+    {
+      stdout = "\\\n",
+      normal = { "ab\\", "cd" },
+      visual = { "a\\", "cd" },
+    },
+  }
+  for _, case in ipairs(cases) do
+    jobs = {}
+    notes = {}
+    local buf = buffer({ "abcd" })
+    vim.api.nvim_win_set_cursor(0, { 1, 1 })
+    press_paste_normal()
+    finish({ code = 0, stdout = case.stdout, stderr = "" })
+    same(text_of(buf), case.normal, "normal " .. vim.inspect(case.stdout))
+    check(#notes == 0, "normal notified " .. vim.inspect(notes))
+
+    jobs = {}
+    notes = {}
+    buf = buffer({ "abcd" })
+    select_chars(1, 1, 1)
+    press_paste_visual()
+    finish({ code = 0, stdout = case.stdout, stderr = "" })
+    same(text_of(buf), case.visual, "visual " .. vim.inspect(case.stdout))
+    check(#notes == 0, "visual notified " .. vim.inspect(notes))
+  end
+
+  jobs = {}
+  notes = {}
+  local buf = buffer({ "abcd" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  press_paste_normal()
+  finish({ code = 0, stdout = "\n", stderr = "" })
+  same(text_of(buf), { "abcd" }, "empty terminator inserted")
+  same(vim.api.nvim_win_get_cursor(0), cursor, "empty terminator cursor")
+  check(#notes == 0, "empty terminator notified " .. vim.inspect(notes))
+
+  jobs = {}
+  notes = {}
+  buf = buffer({ "abcd" })
+  select_chars(1, 1, 2)
+  press_paste_visual()
+  finish({ code = 0, stdout = "\n", stderr = "" })
+  same(text_of(buf), { "abcd" }, "empty terminator deleted the selection")
+  same(notes, {
+    {
+      message = "The converted Markdown is empty. The selection was left unchanged.",
+      level = vim.log.levels.ERROR,
+    },
+  }, "empty terminator")
+end)
+
+test("normal paste leaves the cursor where p leaves it", function()
+  local emoji = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
+  local combining = "e\u{0301}"
+  local samples = { emoji, "Z" .. emoji, combining }
+  for _, text in ipairs(samples) do
+    jobs = {}
+    notes = {}
+    local buf = buffer({ "a." })
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    press_paste_normal()
+    finish({ code = 0, stdout = text, stderr = "" })
+    local pasted = text_of(buf)
+    local plugin_cursor = vim.api.nvim_win_get_cursor(0)
+    check(#notes == 0, "notified " .. vim.inspect(notes))
+
+    buf = buffer({ "a." })
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    vim.fn.setreg("z", text, "c")
+    vim.cmd('normal! "zp')
+    same(text_of(buf), pasted, "text " .. text)
+    same(vim.api.nvim_win_get_cursor(0), plugin_cursor, "cursor " .. text)
+  end
+end)
+
 test("normal paste ignores an older visual selection", function()
   local buf = buffer({ "abcd" })
   select_chars(1, 1, 2)
@@ -538,6 +644,44 @@ test("a line address does not reuse a blockwise selection", function()
   vim.cmd("1HarnessCopyHtml")
   same(last_job().stdin, "abcd\n", "line")
   check(#notes == 0, "blockwise was reused")
+end)
+
+test("pid 1 is not signaled as every process the user can signal", function()
+  local killed = {}
+  vim.uv.kill = function(pid, signal)
+    table.insert(killed, { pid = pid, signal = signal })
+    return 0
+  end
+  buffer({ "hello" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  press_paste_normal()
+  jobs[1].pid = 1
+  press_paste_normal()
+  same(killed, {}, "pid 1 was negated")
+  check(jobs[1].killed == true, "the single process was not signaled")
+  check(jobs[1].signal == "sigterm", "signal")
+end)
+
+test("cancelling the helper signals its process group", function()
+  local killed = {}
+  vim.uv.kill = function(pid, signal)
+    table.insert(killed, { pid = pid, signal = signal })
+    return 0
+  end
+  local buf = buffer({ "hello" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  press_paste_normal()
+  same(jobs[1].env, { NEOVIM_HARNESS_PROCESS_GROUP = "1" }, "env")
+  jobs[1].pid = 4242
+  press_paste_normal()
+  same(killed, { { pid = -4242, signal = "sigterm" } }, "group signal")
+  check(jobs[1].killed == false, "the parent was signaled alone")
+  jobs[1].on_exit({ code = 0, stdout = "OLD", stderr = "" })
+  pump()
+  same(text_of(buf), { "hello" }, "stale paste inserted")
+  jobs[2].on_exit({ code = 0, stdout = "NEW", stderr = "" })
+  pump()
+  same(text_of(buf), { "heNEWllo" }, "newer paste")
 end)
 
 test("a newer paste cancels the previous request", function()

@@ -52,6 +52,23 @@ def test_html_to_markdown_arguments(
     assert kwargs["input"] == b"<p>title</p>"
     assert kwargs["capture_output"] is True
     assert kwargs["check"] is True
+    assert "timeout" not in kwargs
+    strict = HtmlToMarkdown(lua).convert_strict(b"<p>title</p>")
+    assert strict == "# title\n"
+    assert seen["command"] == [
+        "pandoc",
+        "-f",
+        "html",
+        "-t",
+        "gfm-raw_html",
+        "--wrap=none",
+        f"--lua-filter={lua}",
+    ]
+    kwargs = seen["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["input"] == b"<p>title</p>"
+    assert kwargs["capture_output"] is True
+    assert kwargs["check"] is True
     assert kwargs["timeout"] == 30
 
 
@@ -107,7 +124,7 @@ def test_markdown_to_html_arguments_and_body_extraction(
     kwargs = seen["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["input"] == b"hello"
-    assert kwargs["timeout"] == 30
+    assert "timeout" not in kwargs
     assert seen["remove_classes"] is True
     assert seen["transformed_from"] == "<html>raw</html>"
     assert logging.CRITICAL in levels
@@ -118,6 +135,21 @@ def test_markdown_to_html_arguments_and_body_extraction(
     assert result == expected
     assert "<html" not in result
     assert "<body" not in result
+    MarkdownToHtml(css).convert_strict("hello")
+    assert seen["command"] == [
+        "pandoc",
+        "-f",
+        "markdown+hard_line_breaks+lists_without_preceding_blankline",
+        "-c",
+        str(css),
+        "--embed-resources",
+        "--standalone",
+    ]
+    kwargs = seen["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["input"] == b"hello"
+    assert kwargs["timeout"] == 30
+    assert seen["remove_classes"] is True
 
 
 def test_pandoc_launch_and_stdout_errors_return_fallback(
@@ -291,8 +323,11 @@ def test_pandoc_timeout_is_a_strict_failure(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    timeouts: list[object] = []
+
     def fake_run(*args: object, **kwargs: object) -> None:
-        raise subprocess.TimeoutExpired(args[0], 30)
+        timeouts.append(kwargs["timeout"] if "timeout" in kwargs else None)
+        raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout", 30))
 
     def explode(*args: object, **kwargs: object) -> str:
         raise AssertionError("premailer should not run")
@@ -304,13 +339,16 @@ def test_pandoc_timeout_is_a_strict_failure(
     with pytest.raises(ConversionError) as html_error:
         html.convert_strict(b"<p>x</p>")
     assert str(html_error.value) == "Timed out waiting for pandoc."
-    assert html.convert(b"<p>x</p>") == ""
+    with pytest.raises(subprocess.TimeoutExpired):
+        html.convert(b"<p>x</p>")
     markdown = MarkdownToHtml(tmp_path / "style.css")
     with pytest.raises(ConversionError) as markdown_error:
         markdown.convert_strict("x")
     assert str(markdown_error.value) == "Timed out waiting for pandoc."
-    assert markdown.convert("x") == ""
-    assert caplog.text.count("Timed out waiting for pandoc.") == 2
+    with pytest.raises(subprocess.TimeoutExpired):
+        markdown.convert("x")
+    assert timeouts == [30, None, 30, None]
+    assert "Timed out waiting for pandoc." not in caplog.text
 
 
 def test_markdown_conversion_loads_premailer(

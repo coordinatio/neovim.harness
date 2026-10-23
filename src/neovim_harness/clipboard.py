@@ -64,14 +64,12 @@ class WaylandClipboard:
         command = ["wl-paste", "--no-newline"]
         if mimetype:
             command.extend(["-t", mimetype])
-        try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired:
-            return b""
+        # Editor modes publish whatever this returns. A timeout must not become
+        # an empty clipboard, so only the strict helper read is timed.
+        result = subprocess.run(
+            command,
+            capture_output=True,
+        )
         return result.stdout
 
     def read_required(self, mimetype: str) -> bytes:
