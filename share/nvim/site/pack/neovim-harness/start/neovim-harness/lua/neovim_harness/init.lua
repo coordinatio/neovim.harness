@@ -119,13 +119,35 @@ local function visual_range_matches(opts)
   return opts.line1 == low and opts.line2 == high
 end
 
+local function same_position(one, other)
+  return one[2] == other[2] and one[3] == other[3] and one[4] == other[4]
+end
+
+local function lower_right(one, other)
+  if one[2] > other[2] or (one[2] == other[2] and one[3] > other[3]) then
+    return one
+  end
+  return other
+end
+
+-- An exclusive charwise selection that ends in column one of a later row keeps
+-- the line break that ends the row before it, as Vim's yank does. getregion()
+-- drops that break.
+local function exclusive_break(bounds)
+  if vim.o.selection ~= "exclusive" or same_position(bounds.first, bounds.last) then
+    return false
+  end
+  local raw = lower_right(bounds.first, bounds.last)
+  return raw[3] == 1 and raw[2] > math.min(bounds.first[2], bounds.last[2])
+end
+
 local function region_text(bounds)
   local lines = vim.fn.getregion(bounds.first, bounds.last, { type = bounds.kind })
   if type(lines) ~= "table" then
     error("Could not read the selection.")
   end
   local text = table.concat(lines, "\n")
-  if bounds.kind == "V" then
+  if bounds.kind == "V" or exclusive_break(bounds) then
     text = text .. "\n"
   end
   return text
@@ -145,7 +167,8 @@ local function byte_end(line, pos)
   if col < 1 then
     return 0
   end
-  if pos[4] ~= 0 then
+  if pos[4] ~= 0 or vim.str_utf_start(line, col) < 0 then
+    -- The position is inside a character, so the whole character is included.
     local last = col + vim.str_utf_end(line, col)
     if last > #line then
       return #line
@@ -164,17 +187,6 @@ local function byte_start(line, pos)
     return 0
   end
   return col - 1
-end
-
-local function same_position(one, other)
-  return one[2] == other[2] and one[3] == other[3] and one[4] == other[4]
-end
-
-local function lower_right(one, other)
-  if one[2] > other[2] or (one[2] == other[2] and one[3] > other[3]) then
-    return one
-  end
-  return other
 end
 
 -- The position just after the line break that ends row `lnum`, or the end of

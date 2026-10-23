@@ -72,6 +72,13 @@ def test_write_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     assert html[1]["timeout"] == 30
     assert empty[1]["timeout"] == 30
     assert "capture_output" not in plain[1]
+    # wl-copy forks a daemon that owns the selection. It must not inherit our
+    # stdout, because vim.system reports completion at EOF, and it must not
+    # inherit our process group, because cancelling the helper signals it.
+    for options in (plain[1], html[1], empty[1]):
+        assert options["stdout"] is subprocess.DEVNULL
+        assert options["stderr"] is subprocess.DEVNULL
+        assert options["start_new_session"] is True
     assert html[0][0] == ["wl-copy", "-t", "text/html"]
     assert html[1]["input"] == "<p>héllo</p>".encode("utf-8")
     assert empty[0][0] == ["wl-copy"]

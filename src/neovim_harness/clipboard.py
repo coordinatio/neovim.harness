@@ -100,6 +100,14 @@ class WaylandClipboard:
                 input=data.encode("utf-8"),
                 check=True,
                 timeout=COMMAND_TIMEOUT_SECONDS,
+                # wl-copy forks a daemon that owns the selection. It must not
+                # inherit our stdout, because vim.system reports completion at
+                # EOF, and it must not inherit our process group, because
+                # cancelling the helper signals that whole group and would take
+                # the just-copied selection with it.
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
         except subprocess.TimeoutExpired as exc:
             raise ClipboardError("Timed out waiting for wl-copy.") from exc

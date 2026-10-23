@@ -514,6 +514,45 @@ test("a selection that reaches a line break replaces that break", function()
   end
 end)
 
+test("an exclusive copy keeps the break its span covers", function()
+  vim.o.selection = "exclusive"
+  buffer({ "ab", "cd" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.cmd("normal! v")
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  press_copy()
+  same(last_job().stdin, "b\n", "exclusive copy")
+
+  jobs = {}
+  buffer({ "ab", "cd" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.cmd("normal! v")
+  vim.api.nvim_win_set_cursor(0, { 2, 1 })
+  press_copy()
+  same(last_job().stdin, "b\nc", "exclusive copy on a longer line")
+
+  jobs = {}
+  vim.o.selection = "inclusive"
+  buffer({ "ab", "cd" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.cmd("normal! v")
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  press_copy()
+  same(last_job().stdin, "b\nc", "inclusive copy")
+end)
+
+test("a span that ends inside a character keeps that character", function()
+  local emoji = "\u{1F600}"
+  local buf = buffer({ "a" .. emoji .. "b8" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.cmd("normal! v")
+  vim.api.nvim_win_set_cursor(0, { 1, 3 })
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "aZb8" }, "mid-character span")
+  check(#notes == 0, "notified " .. vim.inspect(notes))
+end)
+
 test("exclusive and old selections keep the break they leave out", function()
   vim.o.selection = "exclusive"
   local buf = buffer({ "ab", "cd" })
