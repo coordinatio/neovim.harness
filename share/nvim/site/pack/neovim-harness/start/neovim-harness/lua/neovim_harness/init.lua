@@ -208,7 +208,13 @@ local function charwise_end(bounds, end_pos)
     end
     return raw[2] - 1, col
   end
-  if raw[3] <= #text or raw[4] ~= 0 then
+  if raw[3] <= #text then
+    return end_pos[2] - 1, byte_end(text, end_pos)
+  end
+  -- Past the last byte, a non-zero end offset is the cursor inside a virtual
+  -- cell or inside the last character. Neither covers the line break, and
+  -- the last real byte is where the span ends.
+  if end_pos[4] ~= 0 then
     return end_pos[2] - 1, byte_end(text, end_pos)
   end
   -- Past the last byte the character under the cursor is the line break.
@@ -363,8 +369,10 @@ local function insert_markdown(region, text)
     local lines = split_lines(text)
     vim.api.nvim_buf_set_text(region.buf, region.row, region.col, region.row, region.col, lines)
     local first = lines[1] or ""
+    -- `p` puts the cursor on the first inserted character when the text spans
+    -- lines, and on the last character of the single inserted line otherwise.
     local col = region.col
-    if #first > 0 then
+    if #lines == 1 and #first > 0 then
       col = region.col + (#first - 1) + vim.str_utf_start(first, #first)
     end
     place_cursor(region.buf, region.row + 1, col)

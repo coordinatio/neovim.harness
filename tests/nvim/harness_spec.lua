@@ -435,7 +435,16 @@ end)
 test("normal paste leaves the cursor where p leaves it", function()
   local emoji = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
   local combining = "e\u{0301}"
-  local samples = { emoji, "Z" .. emoji, combining }
+  local samples = {
+    emoji,
+    "Z" .. emoji,
+    combining,
+    "XYZ\nQ",
+    "hello\nworld",
+    combining .. "X\nQ",
+    "\nXYZ",
+    "  \nX",
+  }
   for _, text in ipairs(samples) do
     jobs = {}
     notes = {}
@@ -447,9 +456,10 @@ test("normal paste leaves the cursor where p leaves it", function()
     local plugin_cursor = vim.api.nvim_win_get_cursor(0)
     check(#notes == 0, "notified " .. vim.inspect(notes))
 
+    local trimmed = text
     buf = buffer({ "a." })
     vim.api.nvim_win_set_cursor(0, { 1, 0 })
-    vim.fn.setreg("z", text, "c")
+    vim.fn.setreg("z", trimmed, "c")
     vim.cmd('normal! "zp')
     same(text_of(buf), pasted, "text " .. text)
     same(vim.api.nvim_win_get_cursor(0), plugin_cursor, "cursor " .. text)
@@ -684,6 +694,42 @@ test("virtualedit columns are copied and the buffer keeps real bytes", function(
   press_paste_visual()
   finish({ code = 0, stdout = "Z", stderr = "" })
   same(text_of(buf), { "aZ" }, "virtual paste")
+end)
+
+test("a virtualedit cell after the line end stops at the real text", function()
+  vim.o.virtualedit = "all"
+  local buf = buffer({ "ab", "cd" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.cmd("normal! v")
+  vim.cmd("normal! l")
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "aZ", "cd" }, "virtual cell paste")
+  check(#notes == 0, "notified " .. vim.inspect(notes))
+end)
+
+test("a virtualedit empty line stops at the real text", function()
+  vim.o.virtualedit = "all"
+  local buf = buffer({ "", "a-" })
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  vim.cmd("normal! v")
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z\n", stderr = "" })
+  same(text_of(buf), { "Z", "a-" }, "virtual empty line paste")
+  check(#notes == 0, "notified " .. vim.inspect(notes))
+end)
+
+test("an old selection from a virtualedit position keeps the span", function()
+  vim.o.virtualedit = "all"
+  vim.o.selection = "old"
+  local buf = buffer({ "abcd" })
+  vim.api.nvim_win_set_cursor(0, { 1, 4 })
+  vim.cmd("normal! v")
+  vim.cmd("normal! 0")
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "Z" }, "old virtual span paste")
+  check(#notes == 0, "notified " .. vim.inspect(notes))
 end)
 
 test("a single address copies that line", function()
