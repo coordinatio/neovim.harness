@@ -466,6 +466,86 @@ test("normal paste ignores an older visual selection", function()
   same(text_of(buf), { "aXbcd" }, "old selection was replaced")
 end)
 
+test("a selection that reaches a line break replaces that break", function()
+  local cases = {
+    -- 'selection'=inclusive highlights the break a past-the-end cursor sits on.
+    { lines = { "", "a-" }, select = function()
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })
+      vim.cmd("normal! v")
+    end, want = { "Za-" } },
+    { lines = { "bb", "", "" }, select = function()
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+      vim.cmd("normal! v")
+    end, want = { "bb", "Z" } },
+    { lines = { "ab", "" }, select = function()
+      vim.api.nvim_win_set_cursor(0, { 1, 1 })
+      vim.cmd("normal! v")
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+    end, want = { "aZ" } },
+    { lines = { "ab", "", "cd" }, select = function()
+      vim.api.nvim_win_set_cursor(0, { 1, 1 })
+      vim.cmd("normal! v")
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+    end, want = { "aZcd" } },
+    { lines = { "x", "ab", "y" }, select = function()
+      vim.api.nvim_win_set_cursor(0, { 2, 0 })
+      vim.cmd("normal! v$")
+    end, want = { "x", "Zy" } },
+  }
+  for _, case in ipairs(cases) do
+    jobs = {}
+    notes = {}
+    local buf = buffer(case.lines)
+    case.select()
+    press_paste_visual()
+    finish({ code = 0, stdout = "Z\n", stderr = "" })
+    same(text_of(buf), case.want, "paste over " .. vim.inspect(case.lines))
+    check(#notes == 0, "notified " .. vim.inspect(notes))
+  end
+end)
+
+test("exclusive and old selections keep the break they leave out", function()
+  vim.o.selection = "exclusive"
+  local buf = buffer({ "ab", "cd" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.cmd("normal! v")
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "aZcd" }, "exclusive") -- Vim leaves the first byte of "cd"
+
+  vim.o.selection = "exclusive"
+  jobs = {}
+  buf = buffer({ "ab", "" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.cmd("normal! v")
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "aZ" }, "exclusive to an empty last line")
+
+  vim.o.selection = "old"
+  jobs = {}
+  buf = buffer({ "ab", "" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.cmd("normal! v")
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  press_paste_visual()
+  finish({ code = 0, stdout = "Z", stderr = "" })
+  same(text_of(buf), { "aZ", "" }, "old")
+end)
+
+test("copying an empty selection leaves the clipboard alone", function()
+  buffer({ "", "a-" })
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  vim.cmd("normal! v")
+  press_copy()
+  same(notes, {
+    { message = "Select text before copying it as HTML.", level = vim.log.levels.ERROR },
+  }, "empty selection")
+  check(#jobs == 0, "empty selection started a process")
+end)
+
 test("visual paste replaces the characterwise selection in one undo", function()
   local buf = buffer({ "abcd" })
   select_chars(1, 1, 2)

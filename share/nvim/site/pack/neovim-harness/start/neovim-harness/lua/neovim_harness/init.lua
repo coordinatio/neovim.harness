@@ -166,6 +166,63 @@ local function byte_start(line, pos)
   return col - 1
 end
 
+local function same_position(one, other)
+  return one[2] == other[2] and one[3] == other[3] and one[4] == other[4]
+end
+
+local function lower_right(one, other)
+  if one[2] > other[2] or (one[2] == other[2] and one[3] > other[3]) then
+    return one
+  end
+  return other
+end
+
+-- The position just after the line break that ends row `lnum`, or the end of
+-- the buffer when that row is the last one.
+local function after_break(buf, lnum)
+  local count = vim.api.nvim_buf_line_count(buf)
+  if lnum < count then
+    return lnum, 0
+  end
+  return count - 1, #line_text(buf, count)
+end
+
+-- A charwise span ends where 'selection' puts it. getregionpos reports the
+-- last included byte, which cannot name a position past the last byte, so the
+-- raw end position decides whether the line break is part of the span.
+local function charwise_end(bounds, end_pos)
+  local buf = bounds.buf
+  local raw = lower_right(bounds.first, bounds.last)
+  local text = line_text(buf, raw[2])
+  -- An empty exclusive selection keeps one character, as in Visual mode.
+  local empty = same_position(bounds.first, bounds.last)
+  if vim.o.selection == "exclusive" and not empty then
+    -- The character under the cursor is not included. In column one that
+    -- character is the break that ends the previous row.
+    local col = raw[3] - 1
+    if col > #text then
+      col = #text
+    end
+    if col < 0 then
+      col = 0
+    end
+    return raw[2] - 1, col
+  end
+  if raw[3] <= #text or raw[4] ~= 0 then
+    return end_pos[2] - 1, byte_end(text, end_pos)
+  end
+  -- Past the last byte the character under the cursor is the line break.
+  if vim.o.selection ~= "old" then
+    return after_break(buf, raw[2])
+  end
+  -- "old" does not allow a position past the line end, so that position
+  -- names the last byte of the previous row.
+  if raw[2] < 2 then
+    return 0, 0
+  end
+  return raw[2] - 2, #line_text(buf, raw[2] - 1)
+end
+
 local function paste_region_from(bounds)
   local segments = vim.fn.getregionpos(bounds.first, bounds.last, {
     type = bounds.kind,
@@ -184,13 +241,19 @@ local function paste_region_from(bounds)
       end_row = end_pos[2],
     }
   end
+  local start_row = start_pos[2] - 1
+  local start_col = byte_start(line_text(bounds.buf, start_pos[2]), start_pos)
+  local end_row, end_col = charwise_end(bounds, end_pos)
+  if end_row < start_row or (end_row == start_row and end_col < start_col) then
+    end_row, end_col = start_row, start_col
+  end
   return {
     kind = "v",
     buf = bounds.buf,
-    start_row = start_pos[2] - 1,
-    start_col = byte_start(line_text(bounds.buf, start_pos[2]), start_pos),
-    end_row = end_pos[2] - 1,
-    end_col = byte_end(line_text(bounds.buf, end_pos[2]), end_pos),
+    start_row = start_row,
+    start_col = start_col,
+    end_row = end_row,
+    end_col = end_col,
   }
 end
 
@@ -433,6 +496,11 @@ local function start_process(id, args, stdin, on_result)
 end
 
 local function launch_copy(text)
+  -- Empty Markdown becomes empty HTML, which would empty the clipboard.
+  if text == "" then
+    fail("Select text before copying it as HTML.")
+    return
+  end
   local id = supersede()
   start_process(id, { config.command, "--markdown-to-clipboard" }, text, function(result)
     if type(result) ~= "table" or result.code ~= 0 then

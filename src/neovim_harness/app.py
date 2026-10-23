@@ -15,7 +15,6 @@ from neovim_harness.modes import (
 from neovim_harness.workspace import (
     OpensWorkspace,
     RelocatesWorkspace,
-    Workspace,
     discard_rename_request,
 )
 
