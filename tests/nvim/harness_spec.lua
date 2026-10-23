@@ -551,6 +551,24 @@ test("a span that ends inside a character keeps that character", function()
   finish({ code = 0, stdout = "Z", stderr = "" })
   same(text_of(buf), { "aZb8" }, "mid-character span")
   check(#notes == 0, "notified " .. vim.inspect(notes))
+
+  -- Every 'selection' mode replaces the whole character for such a position,
+  -- because Vim cannot place a cursor inside one.
+  for _, mode in ipairs({ "inclusive", "exclusive", "old" }) do
+    for _, span in ipairs({ { 1, 1, 1, 2 }, { 1, 2, 1, 1 } }) do
+      jobs = {}
+      notes = {}
+      vim.o.selection = mode
+      buf = buffer({ "héllo" })
+      vim.api.nvim_win_set_cursor(0, { span[1], span[2] })
+      vim.cmd("normal! v")
+      vim.api.nvim_win_set_cursor(0, { span[3], span[4] })
+      press_paste_visual()
+      finish({ code = 0, stdout = "X", stderr = "" })
+      same(text_of(buf), { "hXllo" }, mode .. " " .. vim.inspect(span))
+      check(#notes == 0, "notified " .. vim.inspect(notes))
+    end
+  end
 end)
 
 test("exclusive and old selections keep the break they leave out", function()
@@ -582,6 +600,27 @@ test("exclusive and old selections keep the break they leave out", function()
   press_paste_visual()
   finish({ code = 0, stdout = "Z", stderr = "" })
   same(text_of(buf), { "aZ", "" }, "old")
+end)
+
+test("select mode reads and replaces the selected region", function()
+  local buf = buffer({ "abcdef", "ghijkl" })
+  vim.api.nvim_win_set_cursor(0, { 1, 1 })
+  vim.cmd("normal! gh")
+  same(vim.api.nvim_get_mode().mode, "s", "select mode")
+  press_copy()
+  same(last_job().stdin, "b", "select-mode copy")
+  check(vim.api.nvim_buf_get_changedtick(buf) > 0, "copy changed the buffer")
+  vim.cmd("silent! normal! \x1b")
+
+  jobs = {}
+  notes = {}
+  buf = buffer({ "abcdef", "ghijkl" })
+  vim.api.nvim_win_set_cursor(0, { 2, 2 })
+  vim.cmd("normal! gh")
+  press_paste_visual()
+  finish({ code = 0, stdout = "ZZ", stderr = "" })
+  same(text_of(buf), { "abcdef", "ghZZjkl" }, "select-mode paste")
+  check(#notes == 0, "notified " .. vim.inspect(notes))
 end)
 
 test("copying an empty selection leaves the clipboard alone", function()

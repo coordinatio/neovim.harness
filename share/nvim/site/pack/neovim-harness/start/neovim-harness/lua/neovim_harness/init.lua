@@ -41,6 +41,15 @@ local function visual_mode_now()
   if mode == "v" or mode == "V" or mode == BLOCKWISE then
     return mode
   end
+  -- Select mode selects the same region, with "s" and "S" as its charwise and
+  -- linewise kinds. Leaving it first keeps a scheduled insert from being
+  -- reverted by the pending select-mode replacement.
+  if mode == "s" then
+    return "v"
+  end
+  if mode == "S" then
+    return "V"
+  end
   return nil
 end
 
@@ -186,7 +195,8 @@ local function byte_start(line, pos)
   if col < 1 then
     return 0
   end
-  return col - 1
+  -- A position inside a character starts that character.
+  return col - 1 + vim.str_utf_start(line, col)
 end
 
 -- The position just after the line break that ends row `lnum`, or the end of
@@ -208,15 +218,15 @@ local function charwise_end(bounds, end_pos)
   local text = line_text(buf, raw[2])
   -- An empty exclusive selection keeps one character, as in Visual mode.
   local empty = same_position(bounds.first, bounds.last)
-  if vim.o.selection == "exclusive" and not empty then
+  -- A position inside a character names that character, so "exclusive" has
+  -- nothing to leave out.
+  local mid = raw[3] <= #text and vim.str_utf_start(text, raw[3]) < 0
+  if vim.o.selection == "exclusive" and not empty and not mid then
     -- The character under the cursor is not included. In column one that
     -- character is the break that ends the previous row.
-    local col = raw[3] - 1
-    if col > #text then
-      col = #text
-    end
-    if col < 0 then
-      col = 0
+    local col = #text
+    if raw[3] <= #text then
+      col = byte_start(text, raw)
     end
     return raw[2] - 1, col
   end
