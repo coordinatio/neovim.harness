@@ -529,8 +529,9 @@ local function start_process(id, args, stdin, on_result)
 end
 
 local function launch_copy(text)
-  -- Empty Markdown becomes empty HTML, which would empty the clipboard.
-  if text == "" then
+  -- Whitespace-only Markdown also becomes empty HTML, which would empty the
+  -- clipboard with nothing the user can paste back.
+  if not text:find("%S") then
     fail("Select text before copying it as HTML.")
     return
   end

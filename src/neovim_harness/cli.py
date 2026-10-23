@@ -163,7 +163,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 def _run(mode_name: str) -> None:
     # Converters import optional packages. Load them only after the check passes.
     from neovim_harness.assets import AssetPaths
-    from neovim_harness.clipboard import WaylandClipboard
+    from neovim_harness.clipboard import ClipboardError, WaylandClipboard
     from neovim_harness.convert import HtmlToMarkdown, MarkdownToHtml
     from neovim_harness.editor import NeovideEditor
     from neovim_harness.prompt import KDialogPrompt
@@ -197,7 +197,11 @@ def _run(mode_name: str) -> None:
         markdown_to_html=MarkdownToHtml(assets.stylesheet),
         lifecycle=SessionLifecycle(sessions, git, dialog),
     )
-    app.run()
+    try:
+        app.run()
+    except ClipboardError as exc:
+        # An editor-mode publish can still time out or lose the clipboard.
+        _fail(str(exc))
 
 
 def _lead_helper_process_group() -> None:
@@ -239,5 +243,3 @@ def _run_conversion(mode_name: str) -> None:
         _fail(str(exc))
     except subprocess.CalledProcessError:
         _fail("Could not copy text/html to the clipboard.")
-    except FileNotFoundError:
-        _fail("The wl-copy command is not on PATH.")

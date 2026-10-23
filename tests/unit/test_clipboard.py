@@ -225,6 +225,18 @@ def test_read_required_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     assert str(caught.value) == "Timed out waiting for wl-paste."
 
 
+def test_write_missing_command_is_a_clipboard_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError(args[0])
+
+    monkeypatch.setattr("neovim_harness.clipboard.subprocess.run", fake_run)
+    with pytest.raises(ClipboardError) as caught:
+        WaylandClipboard().write("hello", mimetype="text/html")
+    assert str(caught.value) == "The wl-copy command is not on PATH."
+
+
 def test_write_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(*args: object, **kwargs: object) -> None:
         raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])

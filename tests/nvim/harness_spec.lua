@@ -604,12 +604,13 @@ end)
 
 test("select mode reads and replaces the selected region", function()
   local buf = buffer({ "abcdef", "ghijkl" })
+  local tick = vim.api.nvim_buf_get_changedtick(buf)
   vim.api.nvim_win_set_cursor(0, { 1, 1 })
   vim.cmd("normal! gh")
   same(vim.api.nvim_get_mode().mode, "s", "select mode")
   press_copy()
   same(last_job().stdin, "b", "select-mode copy")
-  check(vim.api.nvim_buf_get_changedtick(buf) > 0, "copy changed the buffer")
+  check(vim.api.nvim_buf_get_changedtick(buf) == tick, "copy changed the buffer")
   vim.cmd("silent! normal! \x1b")
 
   jobs = {}
@@ -623,15 +624,33 @@ test("select mode reads and replaces the selected region", function()
   check(#notes == 0, "notified " .. vim.inspect(notes))
 end)
 
-test("copying an empty selection leaves the clipboard alone", function()
-  buffer({ "", "a-" })
-  vim.api.nvim_win_set_cursor(0, { 1, 0 })
-  vim.cmd("normal! v")
-  press_copy()
-  same(notes, {
-    { message = "Select text before copying it as HTML.", level = vim.log.levels.ERROR },
-  }, "empty selection")
-  check(#jobs == 0, "empty selection started a process")
+test("copying an empty or blank selection leaves the clipboard alone", function()
+  local cases = {
+    { lines = { "", "a-" }, select = function()
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })
+      vim.cmd("normal! v")
+    end },
+    -- A linewise copy of a blank line is "\n", which becomes empty HTML.
+    { lines = { "", "a-" }, select = function()
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })
+      vim.cmd("normal! V")
+    end },
+    { lines = { "   " }, select = function()
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })
+      vim.cmd("normal! v$")
+    end },
+  }
+  for _, case in ipairs(cases) do
+    jobs = {}
+    notes = {}
+    buffer(case.lines)
+    case.select()
+    press_copy()
+    same(notes, {
+      { message = "Select text before copying it as HTML.", level = vim.log.levels.ERROR },
+    }, "blank selection " .. vim.inspect(case.lines))
+    check(#jobs == 0, "blank selection started a process")
+  end
 end)
 
 test("visual paste replaces the characterwise selection in one undo", function()

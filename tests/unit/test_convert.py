@@ -52,7 +52,8 @@ def test_html_to_markdown_arguments(
     assert kwargs["input"] == b"<p>title</p>"
     assert kwargs["capture_output"] is True
     assert kwargs["check"] is True
-    assert "timeout" not in kwargs
+    # Editor modes wait for Pandoc, so a slow conversion cannot blank the clipboard.
+    assert kwargs["timeout"] is None
     strict = HtmlToMarkdown(lua).convert_strict(b"<p>title</p>")
     assert strict == "# title\n"
     assert seen["command"] == [
@@ -124,7 +125,7 @@ def test_markdown_to_html_arguments_and_body_extraction(
     kwargs = seen["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["input"] == b"hello"
-    assert "timeout" not in kwargs
+    assert kwargs["timeout"] is None
     assert seen["remove_classes"] is True
     assert seen["transformed_from"] == "<html>raw</html>"
     assert logging.CRITICAL in levels

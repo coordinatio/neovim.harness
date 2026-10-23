@@ -200,13 +200,27 @@ def test_missing_wl_copy_is_an_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     clipboard = _Clipboard()
-    clipboard.write_error = FileNotFoundError("wl-copy")
+    clipboard.write_error = ClipboardError("The wl-copy command is not on PATH.")
     _install(monkeypatch, clipboard, _Result(""), _Result("<p>x</p>"))
     monkeypatch.setattr(sys, "stdin", _Input(b"hello"))
     with pytest.raises(SystemExit) as caught:
         main(["--markdown-to-clipboard"])
     assert caught.value.code == 1
     assert capsys.readouterr().err == "The wl-copy command is not on PATH.\n"
+
+
+def test_a_clipboard_timeout_after_the_editor_exits_is_a_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    clipboard = _Clipboard()
+    clipboard.write_error = ClipboardError("Timed out waiting for wl-copy.")
+    _install(monkeypatch, clipboard, _Result(""), _Result("<p>x</p>"))
+    monkeypatch.setattr(sys, "stdin", _Input(b""))
+    with pytest.raises(SystemExit) as caught:
+        main(["--markdown-to-clipboard"])
+    assert caught.value.code == 1
+    assert capsys.readouterr().err == "Timed out waiting for wl-copy.\n"
 
 
 def test_invalid_utf8_does_not_convert(

@@ -111,3 +111,5 @@ class WaylandClipboard:
             )
         except subprocess.TimeoutExpired as exc:
             raise ClipboardError("Timed out waiting for wl-copy.") from exc
+        except FileNotFoundError as exc:
+            raise ClipboardError("The wl-copy command is not on PATH.") from exc

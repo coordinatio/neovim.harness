@@ -78,13 +78,8 @@ def _run_pandoc(
     *,
     timeout: float | None,
 ) -> subprocess.CompletedProcess[bytes]:
-    if timeout is None:
-        return subprocess.run(
-            command,
-            input=payload,
-            capture_output=True,
-            check=True,
-        )
+    # `timeout=None` waits for Pandoc, which editor modes need so that a slow
+    # conversion cannot blank the clipboard.
     return subprocess.run(
         command,
         input=payload,
