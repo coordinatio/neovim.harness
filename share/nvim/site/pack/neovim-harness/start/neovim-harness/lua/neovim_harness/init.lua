@@ -150,7 +150,30 @@ local function exclusive_break(bounds)
   return raw[3] == 1 and raw[2] > math.min(bounds.first[2], bounds.last[2])
 end
 
+local paste_region_from
+
 local function region_text(bounds)
+  -- getregion() aborts Neovim (a buffer overflow in 0.12) for a
+  -- 'virtualedit' position past the line end when the selection crosses a line
+  -- break, so such a selection is read from the span the paste would replace.
+  local virtual_multiline = bounds.kind == "v"
+    and bounds.first[2] ~= bounds.last[2]
+    and (bounds.first[4] ~= 0 or bounds.last[4] ~= 0)
+  if virtual_multiline then
+    local span = paste_region_from(bounds)
+    local lines = vim.api.nvim_buf_get_text(
+      bounds.buf,
+      span.start_row,
+      span.start_col,
+      span.end_row,
+      span.end_col,
+      {}
+    )
+    if type(lines) ~= "table" then
+      error("Could not read the selection.")
+    end
+    return table.concat(lines, "\n")
+  end
   local lines = vim.fn.getregion(bounds.first, bounds.last, { type = bounds.kind })
   if type(lines) ~= "table" then
     error("Could not read the selection.")
@@ -254,7 +277,7 @@ local function charwise_end(bounds, end_pos)
   return raw[2] - 2, #line_text(buf, raw[2] - 1)
 end
 
-local function paste_region_from(bounds)
+function paste_region_from(bounds)
   local segments = vim.fn.getregionpos(bounds.first, bounds.last, {
     type = bounds.kind,
     eol = true,

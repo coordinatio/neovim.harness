@@ -816,6 +816,30 @@ test("a virtualedit empty line stops at the real text", function()
   check(#notes == 0, "notified " .. vim.inspect(notes))
 end)
 
+test("a virtualedit position past the line end does not abort the copy", function()
+  -- getregion() aborts Neovim for this shape, so the span is read instead.
+  vim.o.virtualedit = "all"
+  for _, mode in ipairs({ "inclusive", "old" }) do
+    jobs = {}
+    notes = {}
+    buffer({ "", "defgh" })
+    vim.o.selection = mode
+    vim.cmd("normal! $llvj0")
+    press_copy()
+    same(last_job().stdin, "\nd", mode .. " virtual copy")
+  end
+  jobs = {}
+  notes = {}
+  vim.o.selection = "exclusive"
+  buffer({ "", "defgh" })
+  vim.cmd("normal! $llvj0")
+  press_copy()
+  same(notes, {
+    { message = "Select text before copying it as HTML.", level = vim.log.levels.ERROR },
+  }, "exclusive virtual copy")
+  check(#jobs == 0, "a blank virtual selection started a process")
+end)
+
 test("an old selection from a virtualedit position keeps the span", function()
   vim.o.virtualedit = "all"
   vim.o.selection = "old"
