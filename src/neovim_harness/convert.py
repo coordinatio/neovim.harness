@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -19,19 +20,15 @@ _PANDOC_FAILURES = (
 
 
 class _LazyModule:
-    """Import a module on first attribute access. Tests replace attributes on this object."""
+    """Call a loader on first attribute access, then read attributes from it."""
 
-    def __init__(self, name: str) -> None:
-        self._name = name
+    def __init__(self, load: Callable[[], object]) -> None:
+        self._load_module = load
         self._module: object | None = None
 
     def _load(self) -> object:
         if self._module is None:
-            if self._name == "cssutils":
-                import cssutils as loaded
-            else:
-                from lxml import html as loaded
-            self._module = loaded
+            self._module = self._load_module()
         return self._module
 
     def __getattr__(self, name: str) -> object:
@@ -51,9 +48,21 @@ class _LazyPremailer:
         return premailer_transform(html, remove_classes=remove_classes)
 
 
+def _import_cssutils() -> object:
+    import cssutils
+
+    return cssutils
+
+
+def _import_lxml_html() -> object:
+    from lxml import html
+
+    return html
+
+
 # Names stay on this module so tests can replace them. Import does not load them.
-cssutils = _LazyModule("cssutils")
-lxml_html = _LazyModule("lxml.html")
+cssutils = _LazyModule(_import_cssutils)
+lxml_html = _LazyModule(_import_lxml_html)
 premailer_transform: _CallsPremailer = _LazyPremailer()
 
 

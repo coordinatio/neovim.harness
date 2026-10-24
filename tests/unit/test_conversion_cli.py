@@ -181,7 +181,7 @@ def test_clipboard_write_failure_does_not_print_html(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     clipboard = _Clipboard()
-    clipboard.write_error = subprocess.CalledProcessError(1, ["wl-copy"])
+    clipboard.write_error = ClipboardError("Could not copy text/html to the clipboard.")
     markdown = _Result("<p>styled</p>")
     _install(monkeypatch, clipboard, _Result(""), markdown)
     monkeypatch.setattr(sys, "stdin", _Input(b"hello"))

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -248,5 +247,3 @@ def _run_conversion(mode_name: str) -> None:
         )
     except (ClipboardError, ConversionError) as exc:
         _fail(str(exc))
-    except subprocess.CalledProcessError:
-        _fail("Could not copy text/html to the clipboard.")

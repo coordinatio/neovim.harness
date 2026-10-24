@@ -267,6 +267,8 @@ local function charwise_end(bounds, end_pos)
     return after_break(buf, raw[2])
   end
   -- "old" leaves the break out. A non-empty row ends with its last real byte.
+  -- Vim's own visual paste deletes one break more for an empty end row; its
+  -- yank agrees with this rule, and so does the documented one.
   if #text > 0 then
     return raw[2] - 1, #text
   end
