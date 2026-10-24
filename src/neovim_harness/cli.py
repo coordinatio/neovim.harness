@@ -31,6 +31,8 @@ from neovim_harness.modes import (
 )
 from neovim_harness.workspace import OpensWorkspace
 
+logger = logging.getLogger(__name__)
+
 _CONVERSION_MODES = frozenset({"clipboard-to-markdown", "markdown-to-clipboard"})
 _PROCESS_GROUP_ENV = "NEOVIM_HARNESS_PROCESS_GROUP"
 
@@ -214,7 +216,12 @@ def _lead_helper_process_group() -> None:
     """
     if os.environ.get(_PROCESS_GROUP_ENV) != "1":
         return
-    os.setpgrp()
+    try:
+        os.setpgrp()
+    except OSError:
+        # Already a group leader, as under setsid. The plugin falls back to
+        # signaling the helper's own pid.
+        logger.debug("Could not lead a new process group")
 
 
 def _run_conversion(mode_name: str) -> None:

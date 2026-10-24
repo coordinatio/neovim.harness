@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from neovim_harness.cli import main
+from neovim_harness.clipboard import ClipboardError
 from neovim_harness.environment import SUCCESS_TEXT, RequirementFailure, format_report
 
 
@@ -210,6 +211,24 @@ def test_main_wires_each_mode(
     sessions = [path for path in root.iterdir() if path.is_dir()]
     assert len(sessions) == 1
     assert sessions[0].parent == root
+
+
+def test_a_publish_failure_after_the_editor_exits_is_a_diagnostic(
+    runtime: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    clipboard = runtime["clipboard"]
+    assert isinstance(clipboard, FakeClipboard)
+
+    def refuse(data: str, mimetype: str = "text/plain") -> None:
+        raise ClipboardError("Timed out waiting for wl-copy.")
+
+    monkeypatch.setattr(clipboard, "write", refuse)
+    with pytest.raises(SystemExit) as caught:
+        main(["-p"])
+    assert caught.value.code == 1
+    assert capsys.readouterr().err == "Timed out waiting for wl-copy.\n"
 
 
 def test_verbose_flag_sets_debug_logging(

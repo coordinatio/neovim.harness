@@ -225,6 +225,22 @@ def test_read_required_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     assert str(caught.value) == "Timed out waiting for wl-paste."
 
 
+def test_write_failure_names_the_mime_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args: object, **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(1, args[0])
+
+    monkeypatch.setattr("neovim_harness.clipboard.subprocess.run", fake_run)
+    clipboard = WaylandClipboard()
+    with pytest.raises(ClipboardError) as html_error:
+        clipboard.write("<p>x</p>", mimetype="text/html")
+    assert str(html_error.value) == "Could not copy text/html to the clipboard."
+    with pytest.raises(ClipboardError) as plain_error:
+        clipboard.write("x", mimetype="")
+    assert str(plain_error.value) == "Could not copy text to the clipboard."
+
+
 def test_write_missing_command_is_a_clipboard_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

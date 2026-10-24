@@ -113,3 +113,8 @@ class WaylandClipboard:
             raise ClipboardError("Timed out waiting for wl-copy.") from exc
         except FileNotFoundError as exc:
             raise ClipboardError("The wl-copy command is not on PATH.") from exc
+        except subprocess.CalledProcessError as exc:
+            # The daemon's stderr is discarded, so report the mime type instead.
+            raise ClipboardError(
+                f"Could not copy {mimetype or 'text'} to the clipboard."
+            ) from exc

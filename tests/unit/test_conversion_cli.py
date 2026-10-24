@@ -343,6 +343,17 @@ def test_in_process_main_does_not_lead_a_process_group(
     assert capsys.readouterr().out == "héllo\n"
 
 
+def test_a_helper_that_is_already_a_group_leader_keeps_going(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse() -> None:
+        raise PermissionError("not a group leader")
+
+    monkeypatch.setenv(_PROCESS_GROUP_ENV, "1")
+    monkeypatch.setattr("neovim_harness.cli.os.setpgrp", refuse)
+    _lead_helper_process_group()  # does not raise
+
+
 def test_plugin_env_makes_the_helper_lead_a_process_group(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -654,7 +654,12 @@ function M.paste_markdown(opts)
     paste_visual()
     return
   end
-  launch_paste(cursor_region())
+  local captured, region = pcall(cursor_region)
+  if not captured then
+    fail("Could not read the selection.")
+    return
+  end
+  launch_paste(region)
 end
 
 local function mapping_enabled(lhs)
