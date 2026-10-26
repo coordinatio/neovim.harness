@@ -277,10 +277,8 @@ end
 
 
 local function table_caption_is_empty(caption)
-    if caption.long ~= nil then
-        return #caption.long == 0
-    end
-    return #caption == 0
+    -- Pandoc 2.10 and later always carry a long caption, which is a block list.
+    return #caption.long == 0
 end
 
 
@@ -451,7 +449,7 @@ Table = function(elem)
     -- keeps a caption as a `Plain`, which the writer would run into the next
     -- block without the blank line a table after it needs.
     local blocks = pandoc.Blocks({ written })
-    for _, block in ipairs(elem.caption.long or elem.caption) do
+    for _, block in ipairs(elem.caption.long) do
         if block.t == "Plain" then
             block = pandoc.Para(block.content)
         end
