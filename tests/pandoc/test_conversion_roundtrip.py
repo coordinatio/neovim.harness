@@ -125,9 +125,11 @@ def test_column_alignment_from_a_body_cell_is_kept(
     )
 
 
-def test_caption_table_keeps_its_cells(
+def test_caption_table_is_written_unpadded_with_its_caption(
     converters: tuple[MarkdownToHtml, HtmlToMarkdown],
 ) -> None:
+    # GFM has no caption, so the caption is the paragraph Pandoc already writes
+    # after the table, and the table itself is written like any other.
     html = table(
         "<tr><th>Name</th><th>Amount</th></tr>",
         "<tr><td>a</td><td>10</td></tr>",
@@ -136,9 +138,48 @@ def test_caption_table_keeps_its_cells(
 
     markdown = to_markdown(converters, html)
 
+    assert markdown == "| Name | Amount |\n| --- | --- |\n| a | 10 |\n\nTotals\n"
     assert "[TABLE]" not in markdown
-    assert "Totals" in markdown
-    assert "| a" in markdown and "10" in markdown
+    assert to_markdown(converters, to_html(converters, markdown)) == markdown
+
+
+def test_caption_table_with_a_list_cell_keeps_its_rows(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    html = table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        "<tr><td><ul><li>x</li></ul></td><td>10</td></tr>",
+        caption="Totals",
+    )
+
+    markdown = to_markdown(converters, html)
+
+    assert markdown == "| Name | Amount |\n| --- | --- |\n| • x | 10 |\n\nTotals\n"
+    assert "[TABLE]" not in markdown
+    assert cell_texts(to_html(converters, markdown)) == ["• x", "10"]
+
+
+def test_caption_table_followed_by_a_table_keeps_both(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    # The caption paragraph must end the block before the next table, or the
+    # reader folds that table into the caption's paragraph.
+    html = table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        "<tr><td>a</td><td>10</td></tr>",
+        caption="Totals",
+    ) + table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        "<tr><td>b</td><td>20</td></tr>",
+    )
+
+    markdown = to_markdown(converters, html)
+
+    assert markdown == (
+        "| Name | Amount |\n| --- | --- |\n| a | 10 |\n\nTotals\n\n"
+        "| Name | Amount |\n| --- | --- |\n| b | 20 |\n"
+    )
+    assert to_html(converters, markdown).count("<table") == 2
 
 
 def test_span_table_keeps_its_cells(
@@ -156,25 +197,124 @@ def test_span_table_keeps_its_cells(
     assert "| a" in markdown and "10" in markdown
 
 
-def test_block_cell_falls_back_to_pandoc(
+def test_code_block_cell_falls_back_to_pandoc(
     converters: tuple[MarkdownToHtml, HtmlToMarkdown],
 ) -> None:
-    # A GFM cell is inline-only.  Rather than write the block content as
-    # inline text, the table is left to Pandoc, which says "[TABLE]".
-    code = table(
+    # A GFM cell is inline-only and a fence inside one would end the row, so a
+    # cell that holds a code block is left to Pandoc, which says "[TABLE]".
+    html = table(
         "<tr><th>Name</th><th>Amount</th></tr>",
         "<tr><td><pre><code>a\nb</code></pre></td><td>10</td></tr>",
     )
-    items = table(
+
+    markdown = to_markdown(converters, html)
+
+    assert "[TABLE]" in markdown
+    assert "```" not in markdown
+
+
+def test_nested_table_cell_falls_back_to_pandoc(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    html = table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        "<tr><td><table><tbody><tr><td>n</td></tr></tbody></table></td>"
+        "<td>10</td></tr>",
+    )
+
+    assert "[TABLE]" in to_markdown(converters, html)
+
+
+def test_list_cell_flattens_item_by_item(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    html = table(
         "<tr><th>Name</th><th>Amount</th></tr>",
         "<tr><td><ul><li>a</li><li>b</li></ul></td><td>10</td></tr>",
     )
 
-    for html in (code, items):
-        markdown = to_markdown(converters, html)
-        assert "[TABLE]" in markdown
-        assert "```" not in markdown
-        assert "- a<br>" not in markdown
+    markdown = to_markdown(converters, html)
+
+    assert markdown == "| Name | Amount |\n| --- | --- |\n| • a<br>• b | 10 |\n"
+    assert "[TABLE]" not in markdown
+    assert cell_texts(to_html(converters, markdown)) == ["• a• b", "10"]
+    assert to_markdown(converters, to_html(converters, markdown)) == markdown
+
+
+def test_ordered_list_cell_flattens_item_by_item_with_its_start(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    html = table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        '<tr><td><ol start="3"><li>a</li><li>b</li></ol></td><td>10</td></tr>',
+    )
+
+    markdown = to_markdown(converters, html)
+
+    # The writer escapes the period of a leading `3.` as `3\.`, which is the
+    # same text on the way in and keeps this Markdown a fixed point.
+    assert markdown == "| Name | Amount |\n| --- | --- |\n| 3\\. a<br>4\\. b | 10 |\n"
+    assert cell_texts(to_html(converters, markdown)) == ["3. a4. b", "10"]
+    assert to_markdown(converters, to_html(converters, markdown)) == markdown
+
+
+def test_block_quote_cell_keeps_its_paragraphs(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    html = table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        "<tr><td><blockquote><p>q1</p><p>q2</p></blockquote></td>"
+        "<td>10</td></tr>",
+    )
+
+    markdown = to_markdown(converters, html)
+
+    assert markdown == "| Name | Amount |\n| --- | --- |\n| q1<br>q2 | 10 |\n"
+    assert to_markdown(converters, to_html(converters, markdown)) == markdown
+
+
+def test_header_cell_keeps_its_text(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    # The level of a header inside a cell has nowhere to go, but its text stays.
+    html = table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        "<tr><td><h3>Title</h3></td><td>10</td></tr>",
+    )
+
+    assert to_markdown(converters, html) == (
+        "| Name | Amount |\n| --- | --- |\n| Title | 10 |\n"
+    )
+
+
+def test_list_nested_in_a_list_item_is_flattened(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    html = table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        "<tr><td><ol><li>a<ul><li>b</li></ul></li><li>c</li></ol></td>"
+        "<td>10</td></tr>",
+    )
+
+    markdown = to_markdown(converters, html)
+
+    assert markdown == (
+        "| Name | Amount |\n| --- | --- |\n| 1\\. a<br>• b<br>2\\. c | 10 |\n"
+    )
+    assert to_markdown(converters, to_html(converters, markdown)) == markdown
+
+
+def test_paragraph_before_a_list_cell_keeps_both(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    html = table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        "<tr><td><p>intro</p><ul><li>a</li></ul></td><td>10</td></tr>",
+    )
+
+    assert to_markdown(converters, html) == (
+        "| Name | Amount |\n| --- | --- |\n| intro<br>• a | 10 |\n"
+    )
 
 
 def test_hard_break_cell_keeps_the_break(
@@ -342,12 +482,28 @@ def test_div_wrapped_cell_is_inline_content(
     )
 
 
-def test_div_wrapping_a_block_still_falls_back(
+def test_div_wrapping_a_list_is_flattened(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    # The `Div` a `<div>` becomes is transparent, so a list inside one is
+    # flattened like a list in the cell itself.
+    html = table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        "<tr><td><div><ul><li>a</li><li>b</li></ul></div></td><td>10</td></tr>",
+    )
+
+    markdown = to_markdown(converters, html)
+
+    assert markdown == "| Name | Amount |\n| --- | --- |\n| • a<br>• b | 10 |\n"
+    assert "[TABLE]" not in markdown
+
+
+def test_div_wrapping_a_code_block_still_falls_back(
     converters: tuple[MarkdownToHtml, HtmlToMarkdown],
 ) -> None:
     html = table(
         "<tr><th>Name</th><th>Amount</th></tr>",
-        "<tr><td><div><ul><li>a</li></ul></div></td><td>10</td></tr>",
+        "<tr><td><div><pre><code>a</code></pre></div></td><td>10</td></tr>",
     )
 
     assert "[TABLE]" in to_markdown(converters, html)
@@ -423,6 +579,58 @@ def test_link_title_with_a_newline_stays_one_row(
         '| Link | Note |\n| --- | --- |\n| [c](https://c "a b\\|c") | y |\n'
     )
     assert to_html(converters, markdown).count("<td") == 2
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        # An unescaped quote ends the title early, and the reader then drops the
+        # whole link instead of just the title.
+        ("a&quot;", '| [c](https://c "a\\"") | y |'),
+        (" a b ", '| [c](https://c "a b") | y |'),
+    ],
+)
+def test_link_title_with_a_quote_or_padding_keeps_the_link(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+    title: str,
+    expected: str,
+) -> None:
+    html = table(
+        "<tr><th>Link</th><th>Note</th></tr>",
+        f'<tr><td><a href="https://c" title="{title}">c</a></td><td>y</td></tr>',
+    )
+
+    markdown = to_markdown(converters, html)
+
+    assert markdown == f"| Link | Note |\n| --- | --- |\n{expected}\n"
+    html_again = to_html(converters, markdown)
+    assert '<a href="https://c"' in html_again
+    assert html_again.count("<td") == 2
+    assert to_markdown(converters, html_again) == markdown
+
+
+def test_block_boundary_does_not_add_a_second_break(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    # A block boundary after a block that already ended in a hard break must not
+    # write a second `<br>`, and a hard break on its own must still do so.
+    for body, expected in (
+        ("<p>a<br></p><p>b</p>", "a<br>b"),
+        ("<br>a", "<br>a"),
+        ("<p>a<br><br>b</p>", "a<br><br>b"),
+        ("<p>a</p><p>b</p>", "a<br>b"),
+    ):
+        html = table(
+            "<tr><th>Name</th><th>Amount</th></tr>",
+            f"<tr><td>{body}</td><td>10</td></tr>",
+        )
+
+        markdown = to_markdown(converters, html)
+
+        assert markdown == (
+            f"| Name | Amount |\n| --- | --- |\n| {expected} | 10 |\n"
+        ), body
+        assert to_markdown(converters, to_html(converters, markdown)) == markdown
 
 
 def test_footer_and_extra_body_rows_keep_their_order(

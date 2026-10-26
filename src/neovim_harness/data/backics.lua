@@ -1,3 +1,7 @@
+-- `•` in UTF-8, spelled out so this file stays ASCII.  A list item in a cell
+-- begins with it, because the cell has no room for a real list.
+local BULLET = "\226\128\162"
+
 local formats = {
     markdown = true,
     markdown_strict = true,
@@ -44,23 +48,6 @@ local function holds_note(inlines)
 end
 
 
---- Flattens the transparent containers a cell may hold into the blocks they
--- wrap.  The HTML reader keeps a `<div>` or a `<section>` inside a cell as a
--- `Div`, and a cell whose only wrapper is one of those still holds inline
--- content.  Everything else, such as a list, a code block, a header, or a
--- block quote, is returned as it is for the caller to reject.
-local function flatten_containers(blocks, flat)
-    for _, block in ipairs(blocks) do
-        if block.t == "Div" then
-            flatten_containers(block.content, flat)
-        else
-            table.insert(flat, block)
-        end
-    end
-    return flat
-end
-
-
 --- A GFM table cell holds inline content only.  Returns the cell's inlines
 -- split into runs at every block boundary and at every hard break, or nil
 -- when the cell holds a block that a pipe table cannot express.  The runs
@@ -68,27 +55,19 @@ end
 local function cell_runs(cell)
     local runs = {}
     local current = {}
+    -- True when the last run was closed by a block or a list item rather than
+    -- by a hard break.  A cell that ends there adds no empty run, so it gains
+    -- no second `<br>`; a cell that ends after a hard break keeps it.
+    local closed_by_boundary = false
 
     local function finish_run()
         table.insert(runs, current)
         current = {}
     end
 
-    for index, block in ipairs(flatten_containers(cell.contents, {})) do
-        if block.t ~= "Plain" and block.t ~= "Para" then
-            return nil
-        end
-        -- The writer hoists a note definition only when the cell is part of the
-        -- document it writes.  A cell written on its own would put the
-        -- definition inside the row and number it from one, so leave such a
-        -- table to Pandoc, which keeps `| a[^1] | b |` and the definition.
-        if holds_note(block.content) then
-            return nil
-        end
-        if index > 1 then
-            finish_run()
-        end
-        for _, inline in ipairs(block.content) do
+    local function push(inlines)
+        for _, inline in ipairs(inlines) do
+            closed_by_boundary = false
             if inline.t == "LineBreak" then
                 finish_run()
             else
@@ -96,7 +75,94 @@ local function cell_runs(cell)
             end
         end
     end
-    finish_run()
+
+    -- A boundary between two blocks, and the one at each end of a list item.
+    -- A run that a hard break already closed is not closed again, so
+    -- `<p>a<br></p><p>b</p>` keeps one break and not two.
+    local function boundary()
+        closed_by_boundary = true
+        if #current > 0 then
+            finish_run()
+        end
+    end
+
+    -- The first run of a list item starts with its marker, so that items stay
+    -- apart on one line of the cell.
+    local function push_marker(number)
+        if number == nil then
+            push({ pandoc.Str(BULLET), pandoc.Space() })
+        else
+            push({ pandoc.Str(number .. "."), pandoc.Space() })
+        end
+    end
+
+    local emit_blocks
+
+    --- Flattens a list item by item.  Every item begins a run of its own.
+    local function emit_list(list)
+        local first = 1
+        if list.t == "OrderedList" then
+            first = list.start or 1
+        end
+        for index, item in ipairs(list.content) do
+            boundary()
+            if list.t == "OrderedList" then
+                push_marker(first + index - 1)
+            else
+                push_marker(nil)
+            end
+            if not emit_blocks(item) then
+                return false
+            end
+            boundary()
+        end
+        return true
+    end
+
+    --- Emits one block of a cell.  A `Div` and a `BlockQuote` are transparent
+    -- wrappers, a `Header` keeps its inlines and loses its level, and a list is
+    -- flattened item by item.  A code block, a nested table, and every other
+    -- block a pipe table cannot hold are rejected for the caller to fall back
+    -- on.
+    local function emit_block(block)
+        if block.t == "Div" or block.t == "BlockQuote" then
+            return emit_blocks(block.content)
+        elseif block.t == "Plain"
+            or block.t == "Para"
+            or block.t == "Header" then
+            -- The writer hoists a note definition only when the cell is part of
+            -- the document it writes.  A cell written on its own would put the
+            -- definition inside the row and number it from one, so leave such a
+            -- table to Pandoc, which keeps `| a[^1] | b |` and the definition.
+            if holds_note(block.content) then
+                return false
+            end
+            push(block.content)
+            return true
+        elseif block.t == "BulletList" or block.t == "OrderedList" then
+            return emit_list(block)
+        end
+        return false
+    end
+
+    function emit_blocks(blocks)
+        for index, block in ipairs(blocks) do
+            if index > 1 then
+                boundary()
+            end
+            if not emit_block(block) then
+                return false
+            end
+        end
+        return true
+    end
+
+    if not emit_blocks(cell.contents) then
+        return nil
+    end
+    if #runs == 0 or not closed_by_boundary then
+        finish_run()
+    end
     return runs
 end
 
@@ -141,14 +207,18 @@ end
 --- A link or image title is written between quotes on the row itself, so a
 -- line break there splits the row and a pipe there splits the cell.  Pandoc
 -- writes the title verbatim apart from its own quoting, so the title gets the
--- same treatment as text: a line break becomes a space, then a backslash and
--- a pipe are escaped.
+-- same treatment as text: a line break becomes a space, the padding around the
+-- title is dropped, and then a backslash, a double quote, and a pipe are
+-- escaped.  An unescaped quote ends the title early and the reader drops the
+-- whole link.
 local function protect_title(title)
     if title == nil then
         return title
     end
     title = title:gsub("[\r\n\t]", " ")
+    title = title:gsub("^%s+", ""):gsub("%s+$", "")
     title = title:gsub("\\", "\\\\")
+    title = title:gsub('"', '\\"')
     return (title:gsub("|", "\\|"))
 end
 
@@ -318,9 +388,6 @@ Table = function(elem)
         or elem.foot == nil then
         return elem
     end
-    if not table_caption_is_empty(elem.caption) then
-        return elem
-    end
     local columns = #elem.colspecs
     if not table_is_rectangular(elem) or columns == 0 then
         return elem
@@ -375,5 +442,20 @@ Table = function(elem)
         table.insert(lines, rendered)
     end
 
-    return pandoc.RawBlock("gfm", table.concat(lines, "\n") .. "\n")
+    local written = pandoc.RawBlock("gfm", table.concat(lines, "\n") .. "\n")
+    if table_caption_is_empty(elem.caption) then
+        return written
+    end
+    -- GFM has no table caption, so Pandoc writes one as the paragraph after the
+    -- table.  The caption's blocks are kept as they are, except that the reader
+    -- keeps a caption as a `Plain`, which the writer would run into the next
+    -- block without the blank line a table after it needs.
+    local blocks = pandoc.Blocks({ written })
+    for _, block in ipairs(elem.caption.long or elem.caption) do
+        if block.t == "Plain" then
+            block = pandoc.Para(block.content)
+        end
+        blocks:insert(block)
+    end
+    return blocks
 end
