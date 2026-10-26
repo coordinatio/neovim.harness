@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,6 +56,13 @@ def _desktop(path: Path) -> dict[str, str]:
     return values
 
 
+def _package_version() -> str:
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    version = data["project"]["version"]
+    assert isinstance(version, str)
+    return version
+
+
 def _bash_array(text: str, name: str) -> list[str]:
     match = re.search(rf"^{name}=\((.*?)\)$", text, re.M | re.S)
     assert match is not None
@@ -83,7 +91,9 @@ def test_desktop_files_have_the_launcher_keys() -> None:
 def test_pkgbuild_matches_the_package_contract() -> None:
     text = (ROOT / "packaging" / "arch" / "PKGBUILD").read_text(encoding="utf-8")
     assert "pkgname=neovim.harness" in text
-    assert "pkgver=0.3.0" in text
+    # The pacman package version tracks the wheel, so a release bumps one place
+    # and this breaks if the other is left behind.
+    assert f"pkgver={_package_version()}" in text
     assert "pkgrel=1" in text
     assert "arch=('any')" in text
     assert "license=('MIT')" in text

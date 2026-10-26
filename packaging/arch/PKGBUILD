@@ -1,6 +1,6 @@
 # Maintainer: neovim.harness contributors
 pkgname=neovim.harness
-pkgver=0.3.0
+pkgver=0.4.0
 pkgrel=1
 pkgdesc='Edit Wayland clipboard text in Neovide, convert it from Neovim, or start and resume a named session'
 arch=('any')
