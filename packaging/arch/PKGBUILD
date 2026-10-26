@@ -34,6 +34,7 @@ build() {
 
 check() {
   cd "$startdir/../.."
+  pytest tests/pandoc --tb=no -q
   pytest tests/environment --tb=no -q
   pytest tests/unit --cov=neovim_harness --cov-report=term-missing --cov-fail-under=90
 }
