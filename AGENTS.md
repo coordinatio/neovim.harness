@@ -80,6 +80,7 @@ Source files live in `share/applications/`. `Exec` is the PATH command `neovim.h
 
 - `tests/unit/` uses fakes and `monkeypatch`. It must not read or write the real clipboard, launch Neovide, or create directories under the user's home. Session tests use `tmp_path`. `tests/unit/test_nvim_plugin.py` runs the Lua module in headless Neovim with `vim.system` mocked.
 - `tests/environment/` calls the real machine: real `PATH`, real imports, and the real `WAYLAND_DISPLAY`. It does not launch Neovide. Each failed assertion message is only that check's user-facing paragraph. `tests/environment/conftest.py` reprints the failures as one report.
+- Driving the module from headless Neovim by hand loads the real configuration, and two things there look like a broken module. Use an empty working directory: `./?.lua` is first in `package.path`, so a scratch `cmp.lua` is required in place of the module a plugin really wants, and a scaffold that replaces `vim.system` and `vim.notify` then applies process-wide, which makes a copy report nothing and leave the clipboard alone because the converter never started. Do not block the event loop in a `vim.wait()` predicate: a blocking `vim.fn.system()` or `vim.fn.systemlist()` call stops the converter's callback, so the wait always reaches its timeout. Quit from a deferred callback and read the clipboard after Neovim exits; quitting first leaves the clipboard unchanged.
 
 ```sh
 pytest tests/unit --cov=neovim_harness --cov-report=term-missing --cov-fail-under=90

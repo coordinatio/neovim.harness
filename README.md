@@ -52,6 +52,17 @@ require("neovim_harness").setup({
 
 Set a mapping to `false` to leave it unset. The commands are created either way. Calling `setup()` again replaces the previous commands and mappings.
 
+`lazy.nvim` rebuilds `'runtimepath'` and drops the directory the package installs into, so `require("neovim_harness")` reports `module 'neovim_harness' not found` there. Append that directory before `setup()`:
+
+```lua
+vim.opt.runtimepath:append("/usr/share/nvim/site/pack/neovim-harness/start/neovim-harness")
+require("neovim_harness").setup()
+```
+
+Any configuration that reports `module 'neovim_harness' not found` needs that same `runtimepath:append(...)` line. The error says only that no directory on `'runtimepath'` holds `lua/neovim_harness/init.lua`, so the cause does not matter: a plugin manager that rebuilds `'runtimepath'` the way `lazy.nvim` does, or a configuration that assigns `'runtimepath'` instead of appending to it.
+
+From a git checkout, append `<checkout>/share/nvim/site/pack/neovim-harness/start/neovim-harness` instead, where `<checkout>` is the root of the clone. Both paths follow Neovim's `pack/<package>/start/<plugin>` layout, which the Arch package installs under `/usr/share/nvim/site` unchanged.
+
 | Action | Command | Mapping |
 |---|---|---|
 | Copy the visual selection to the clipboard as HTML | `:HarnessCopyHtml` | `<leader>mh` in visual mode |
@@ -67,14 +78,6 @@ These are the commands the module runs. They do not open Neovide. Errors go to s
 |---|---|
 | `neovim.harness --clipboard-to-markdown` | Read `text/html` and write Markdown to standard output |
 | `neovim.harness --markdown-to-clipboard` | Read UTF-8 Markdown from standard input and copy `text/html` |
-
-From a git checkout, add the plugin directory before `setup()`:
-
-```lua
-vim.opt.runtimepath:append("/path/to/neovim.harness/share/nvim/site/pack/neovim-harness/start/neovim-harness")
-```
-
-The installed package already places that directory under `/usr/share/nvim/site`.
 
 ## Requirements
 
