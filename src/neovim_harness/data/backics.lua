@@ -30,6 +30,20 @@ CodeBlock = function(elem)
 end
 
 
+--- True when the inlines hold a footnote reference at any depth.  Pandoc nests
+-- it inside a Superscript or a Link in its own footnote HTML.
+local function holds_note(inlines)
+    local found = false
+    pandoc.Inlines(inlines):walk({
+        Note = function(note)
+            found = true
+            return note
+        end
+    })
+    return found
+end
+
+
 --- A GFM table cell holds inline content only.  Returns the cell's inlines
 -- split into runs at every block boundary and at every hard break, or nil
 -- when the cell holds a block that a pipe table cannot express.  The runs
@@ -45,6 +59,13 @@ local function cell_runs(cell)
 
     for index, block in ipairs(cell.contents) do
         if block.t ~= "Plain" and block.t ~= "Para" then
+            return nil
+        end
+        -- The writer hoists a note definition only when the cell is part of the
+        -- document it writes.  A cell written on its own would put the
+        -- definition inside the row and number it from one, so leave such a
+        -- table to Pandoc, which keeps `| a[^1] | b |` and the definition.
+        if holds_note(block.content) then
             return nil
         end
         if index > 1 then
@@ -63,25 +84,68 @@ local function cell_runs(cell)
 end
 
 
+--- The position just past a code span that starts at `from`, or nil when no
+-- run of exactly as many backticks closes it.
+local function code_span_end(text, from)
+    local width = #text:match("^(`+)", from)
+    local index = from + width
+    while true do
+        local candidate = text:find("`", index, true)
+        if candidate == nil then
+            return nil
+        end
+        local closing = text:match("^(`+)", candidate)
+        if #closing == width then
+            return candidate + width
+        end
+        index = candidate + #closing
+    end
+end
+
+
 --- A bare `|` splits a cell, and the GFM writer escapes it in `Str` text only.
 -- Escaping at the text level with a backslash count keeps `\|` and `\\\|`
--- and also escapes the pipe in a code span or in a link title.
+-- and also escapes the pipe in a link title or in a link destination.  A pipe
+-- inside a code span keeps no backslash: the Markdown reader this project uses
+-- does not split a cell there, and escaping it would leave a visible `\`.
 local function escape_pipes(text)
     local escaped = {}
     local backslashes = 0
-    for index = 1, #text do
+    local index = 1
+    while index <= #text do
         local char = text:sub(index, index)
-        if char == "|" then
+        if char == "`" and backslashes % 2 == 0 then
+            local closing = code_span_end(text, index)
+            if closing ~= nil then
+                table.insert(escaped, text:sub(index, closing - 1))
+                index = closing
+            else
+                local run = text:match("^(`+)", index)
+                table.insert(escaped, run)
+                index = index + #run
+            end
+            backslashes = 0
+        elseif char == "`" then
+            -- An escaped backtick is literal text, not a code span delimiter.
+            backslashes = 0
+            table.insert(escaped, char)
+            index = index + 1
+        elseif char == "|" then
             if backslashes % 2 == 0 then
                 table.insert(escaped, "\\")
             end
             backslashes = 0
+            table.insert(escaped, char)
+            index = index + 1
         elseif char == "\\" then
             backslashes = backslashes + 1
+            table.insert(escaped, char)
+            index = index + 1
         else
             backslashes = 0
+            table.insert(escaped, char)
+            index = index + 1
         end
-        table.insert(escaped, char)
     end
     return table.concat(escaped)
 end
@@ -91,11 +155,24 @@ local function gfm_run(inlines)
     -- Raw HTML is disabled here, so an element attribute is dropped exactly as
     -- it is everywhere else in this output.  The `<br>` between runs is added
     -- after writing, so it never goes through the writer and is never dropped.
-    local rendered = pandoc.write(pandoc.Pandoc({ pandoc.Plain(inlines) }), "gfm-raw_html", {
+    -- A hard break inside Strong, Emph, Span, Link, or any other container is
+    -- that same `<br>`: the writer would otherwise emit a backslash and a
+    -- newline and split the row.
+    local lifted = pandoc.Inlines(inlines):walk({
+        LineBreak = function()
+            return pandoc.RawInline("gfm", "<br>")
+        end
+    })
+    local rendered = pandoc.write(pandoc.Pandoc({ pandoc.Plain(lifted) }), "gfm-raw_html", {
         wrap_text = "none"
     })
     rendered = rendered:gsub("^%s+", "")
     rendered = rendered:gsub("%s+$", "")
+    -- Pathological content, such as a link title with a newline, still writes a
+    -- second line.  Leave that table to Pandoc instead of splitting the row.
+    if rendered:find("\n", 1, true) then
+        return nil
+    end
     return rendered
 end
 
@@ -107,7 +184,11 @@ local function gfm_cell(cell)
     end
     local rendered = {}
     for index, inlines in ipairs(runs) do
-        rendered[index] = gfm_run(inlines)
+        local run = gfm_run(inlines)
+        if run == nil then
+            return nil
+        end
+        rendered[index] = run
     end
     return escape_pipes(table.concat(rendered, "<br>"))
 end
@@ -219,11 +300,11 @@ Table = function(elem)
     if not table_caption_is_empty(elem.caption) then
         return elem
     end
-    if not table_is_rectangular(elem) or #elem.head.rows == 0 then
+    local columns = #elem.colspecs
+    if not table_is_rectangular(elem) or #elem.head.rows == 0 or columns == 0 then
         return elem
     end
 
-    local columns = #elem.colspecs
     local header = table_row(elem.head.rows[1], columns)
     if header == nil then
         return elem

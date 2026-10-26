@@ -7,6 +7,8 @@ otherwise have to fall back on.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from neovim_harness.assets import ConversionAssets
@@ -38,6 +40,31 @@ def table(header: str, body: str, caption: str = "") -> str:
         f"<thead>{header}</thead>"
         f"<tbody>{body}</tbody>"
         f"</table>"
+    )
+
+
+def cell_texts(html: str) -> list[str]:
+    return [
+        re.sub(r"<[^>]*>", "", cell)
+        for cell in re.findall(r"<td[^>]*>(.*?)</td>", html, re.S)
+    ]
+
+
+def code_texts(html: str) -> list[str]:
+    return re.findall(r"<code[^>]*>(.*?)</code>", html, re.S)
+
+
+def footnote_reference(text: str) -> str:
+    return (
+        f'{text}<a href="#fn1" class="footnote-ref" id="fnref1" '
+        'role="doc-noteref"><sup>1</sup></a>'
+    )
+
+
+def footnotes() -> str:
+    return (
+        '<section id="footnotes" class="footnotes footnotes-end-of-document" '
+        'role="doc-endnotes"><hr><ol><li id="fn1"><p>note</p></li></ol></section>'
     )
 
 
@@ -202,6 +229,80 @@ def test_link_in_a_cell_stays_a_link(
     assert "style" not in markdown
 
 
+@pytest.mark.parametrize(
+    ("cell", "expected"),
+    [
+        ("<strong>a<br>b</strong>", "**a<br>b**"),
+        ('<span style="font-weight:700">a<br>b</span>', "a<br>b"),
+        ('<a href="https://x">a<br>b</a>', "[a<br>b](https://x)"),
+        ("<del>a<br>b</del>", "~~a<br>b~~"),
+    ],
+)
+def test_hard_break_inside_an_inline_container_stays_one_row(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+    cell: str,
+    expected: str,
+) -> None:
+    html = table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        f"<tr><td>{cell}</td><td>c</td></tr>",
+    )
+
+    markdown = to_markdown(converters, html)
+
+    assert markdown == f"| Name | Amount |\n| --- | --- |\n| {expected} | c |\n"
+    html_again = to_html(converters, markdown)
+    # One row of two cells, and the break became HTML inside the cell instead
+    # of a backslash and a newline that split the row.
+    assert html_again.count("<tr") == 2
+    assert html_again.count("<td") == 2
+    assert "<br>" in html_again
+
+
+def test_footnote_in_a_body_cell_is_left_to_pandoc(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    html = (
+        table(
+            "<tr><th>Name</th><th>Amount</th></tr>",
+            f"<tr><td>{footnote_reference('a')}</td><td>b</td></tr>",
+        )
+        + footnotes()
+    )
+
+    markdown = to_markdown(converters, html)
+    lines = markdown.splitlines()
+    note_row = next(line for line in lines if "a[^1]" in line)
+
+    # The cell after the reference keeps its text inside the table, and the
+    # definition is written after the table rather than inside the row.
+    assert "| b" in note_row
+    assert lines.index("") > lines.index(note_row)
+    assert markdown.rstrip().endswith("[^1]: note")
+    assert cell_texts(to_html(converters, markdown))[1] == "b"
+
+
+def test_footnote_in_a_header_cell_is_left_to_pandoc(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    html = (
+        table(
+            f"<tr><th>{footnote_reference('h')}</th><th>Amount</th></tr>",
+            "<tr><td>a</td><td>b</td></tr>",
+        )
+        + footnotes()
+    )
+
+    markdown = to_markdown(converters, html)
+    lines = markdown.splitlines()
+    header_row = next(line for line in lines if "h[^1]" in line)
+
+    assert "| Amount" in header_row
+    assert lines.index("") > lines.index(header_row)
+    assert markdown.rstrip().endswith("[^1]: note")
+    assert cell_texts(to_html(converters, markdown)) == ["a", "b"]
+
+
 def test_cell_ending_in_a_backslash_is_not_a_hard_break(
     converters: tuple[MarkdownToHtml, HtmlToMarkdown],
 ) -> None:
@@ -221,15 +322,33 @@ def test_pipe_inside_a_code_span_does_not_end_the_cell(
     markdown = to_markdown(converters, html)
 
     assert markdown == (
-        "| Command | Note |\n| --- | --- |\n| `ps aux \\| grep x` | y |\n"
+        "| Command | Note |\n| --- | --- |\n| `ps aux | grep x` | y |\n"
     )
-    # One row of two cells must come back, not three cells out of a split
-    # one.  Pandoc's own Markdown reader keeps the escaped backslash inside
-    # a code span; the GFM reader drops it as the spec requires.
+    # One row of two cells must come back, not three cells out of a split one.
+    # The reader this project uses keeps a pipe inside a code span, so the cell
+    # holds the original text and gains no backslash.
     html_again = to_html(converters, markdown)
     assert html_again.count("<td") == 2
-    assert "<code" in html_again
-    assert "grep x" in html_again
+    assert code_texts(html_again) == ["ps aux | grep x"]
+
+
+def test_literal_backtick_before_a_code_span_does_not_hide_a_pipe(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    # The writer escapes a literal backtick, and that escaped backtick is not a
+    # code span opener.  Pairing it with the real code span would leave the
+    # pipe bare and split the row.
+    html = table(
+        "<tr><th>Command</th><th>Note</th></tr>",
+        "<tr><td>a ` b <code>c|d</code></td><td>e</td></tr>",
+    )
+
+    markdown = to_markdown(converters, html)
+
+    assert markdown == "| Command | Note |\n| --- | --- |\n| a \\` b `c|d` | e |\n"
+    html_again = to_html(converters, markdown)
+    assert html_again.count("<td") == 2
+    assert code_texts(html_again) == ["c|d"]
 
 
 def test_table_markdown_is_a_fixed_point(
@@ -247,3 +366,4 @@ def test_table_markdown_is_a_fixed_point(
 
     assert "[TABLE]" not in first
     assert second == first
+    assert code_texts(to_html(converters, first)) == ["a|b"]
