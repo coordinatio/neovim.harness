@@ -306,9 +306,144 @@ def test_footnote_in_a_header_cell_is_left_to_pandoc(
 def test_cell_ending_in_a_backslash_is_not_a_hard_break(
     converters: tuple[MarkdownToHtml, HtmlToMarkdown],
 ) -> None:
+    # A literal backslash is written as `\\`, so it is one backslash again on
+    # the way in and a cell that ends there cannot become a hard break.
     html = table("<tr><th>Path</th></tr>", "<tr><td>C:\\Users\\</td></tr>")
 
-    assert to_markdown(converters, html) == "| Path |\n| --- |\n| C:\\Users\\\\ |\n"
+    assert to_markdown(converters, html) == "| Path |\n| --- |\n| C:\\\\Users\\\\ |\n"
+
+
+def test_backslash_before_a_letter_keeps_the_text(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    # A backslash written as it stands reaches this project's Markdown reader as
+    # `\Word`, which it turns into raw TeX that the HTML writer then drops.
+    for path in ("C:\\Users\\me", "C:\\Users\\"):
+        html = table("<tr><th>Path</th></tr>", f"<tr><td>{path}</td></tr>")
+
+        markdown = to_markdown(converters, html)
+        assert cell_texts(to_html(converters, markdown)) == [path]
+        # The written Markdown is a fixed point of the same round trip too.
+        assert to_markdown(converters, to_html(converters, markdown)) == markdown
+
+
+def test_div_wrapped_cell_is_inline_content(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    # A browser and many web apps wrap cell content in a `div`, and the HTML
+    # reader keeps that wrapper.  It is transparent, so the table stays.
+    html = table(
+        "<tr><th>Region</th><th>Note</th></tr>",
+        "<tr><td><div>North</div></td><td><div><div>a<br>b</div></div></td></tr>",
+    )
+
+    assert to_markdown(converters, html) == (
+        "| Region | Note |\n| --- | --- |\n| North | a<br>b |\n"
+    )
+
+
+def test_div_wrapping_a_block_still_falls_back(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    html = table(
+        "<tr><th>Name</th><th>Amount</th></tr>",
+        "<tr><td><div><ul><li>a</li></ul></div></td><td>10</td></tr>",
+    )
+
+    assert "[TABLE]" in to_markdown(converters, html)
+
+
+def test_headerless_table_keeps_every_row(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    # A table written without `<thead>` has no header row at all.  An empty
+    # header keeps the cell count and invents no text.
+    html = (
+        "<table><tbody>"
+        "<tr><td>a<br>b</td><td><code>x|y</code></td></tr>"
+        "<tr><td>c</td><td>d</td></tr>"
+        "</tbody></table>"
+    )
+
+    markdown = to_markdown(converters, html)
+
+    assert markdown == "|  |  |\n| --- | --- |\n| a<br>b | `x|y` |\n| c | d |\n"
+    html_again = to_html(converters, markdown)
+    # Four body cells, no invented header text, and no split row.
+    assert cell_texts(html_again) == ["ab", "x|y", "c", "d"]
+    assert to_markdown(converters, html_again) == markdown
+
+
+def test_headerless_table_uses_its_tbody_header_row(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    # The reader keeps a `<tbody>` header row in the body's head, so it can
+    # still become the one header row GFM has.
+    html = (
+        "<table><tbody>"
+        '<tr><th>Name</th><th align="right">Amount</th></tr>'
+        "<tr><td>a</td><td>10</td></tr>"
+        "</tbody></table>"
+    )
+
+    assert to_markdown(converters, html) == (
+        "| Name | Amount |\n| --- | ---: |\n| a | 10 |\n"
+    )
+
+
+def test_pipe_after_a_backslash_keeps_both(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    # `\\|` is one backslash and one pipe.  Pandoc's writer drops a pipe that
+    # follows an odd run of backslashes, so both characters are written as raw
+    # inlines instead of being escaped after writing.
+    html = table(
+        "<tr><th>Pattern</th><th>Note</th></tr>", "<tr><td>a\\|b</td><td>y</td></tr>"
+    )
+
+    markdown = to_markdown(converters, html)
+
+    assert markdown == "| Pattern | Note |\n| --- | --- |\n| a\\\\\\|b | y |\n"
+    html_again = to_html(converters, markdown)
+    assert cell_texts(html_again) == ["a\\|b", "y"]
+    assert to_markdown(converters, html_again) == markdown
+
+
+def test_link_title_with_a_newline_stays_one_row(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    html = table(
+        "<tr><th>Link</th><th>Note</th></tr>",
+        '<tr><td><a href="https://c" title="a\nb|c">c</a></td><td>y</td></tr>',
+    )
+
+    markdown = to_markdown(converters, html)
+
+    assert markdown == (
+        '| Link | Note |\n| --- | --- |\n| [c](https://c "a b\\|c") | y |\n'
+    )
+    assert to_html(converters, markdown).count("<td") == 2
+
+
+def test_footer_and_extra_body_rows_keep_their_order(
+    converters: tuple[MarkdownToHtml, HtmlToMarkdown],
+) -> None:
+    two_bodies = (
+        "<table><thead><tr><th>h</th></tr></thead>"
+        "<tbody><tr><td>one</td></tr></tbody>"
+        "<tbody><tr><td>two</td></tr></tbody>"
+        "<tfoot><tr><td>total</td></tr></tfoot></table>"
+    )
+    # Valid HTML5 allows the footer before the body it belongs to.
+    footer_first = (
+        "<table><thead><tr><th>h</th></tr></thead>"
+        "<tfoot><tr><td>total</td></tr></tfoot>"
+        "<tbody><tr><td>one</td></tr><tr><td>two</td></tr></tbody></table>"
+    )
+
+    expected = "| h |\n| --- |\n| one |\n| two |\n| total |\n"
+    assert to_markdown(converters, two_bodies) == expected
+    assert to_markdown(converters, footer_first) == expected
 
 
 def test_pipe_inside_a_code_span_does_not_end_the_cell(

@@ -44,6 +44,23 @@ local function holds_note(inlines)
 end
 
 
+--- Flattens the transparent containers a cell may hold into the blocks they
+-- wrap.  The HTML reader keeps a `<div>` or a `<section>` inside a cell as a
+-- `Div`, and a cell whose only wrapper is one of those still holds inline
+-- content.  Everything else, such as a list, a code block, a header, or a
+-- block quote, is returned as it is for the caller to reject.
+local function flatten_containers(blocks, flat)
+    for _, block in ipairs(blocks) do
+        if block.t == "Div" then
+            flatten_containers(block.content, flat)
+        else
+            table.insert(flat, block)
+        end
+    end
+    return flat
+end
+
+
 --- A GFM table cell holds inline content only.  Returns the cell's inlines
 -- split into runs at every block boundary and at every hard break, or nil
 -- when the cell holds a block that a pipe table cannot express.  The runs
@@ -57,7 +74,7 @@ local function cell_runs(cell)
         current = {}
     end
 
-    for index, block in ipairs(cell.contents) do
+    for index, block in ipairs(flatten_containers(cell.contents, {})) do
         if block.t ~= "Plain" and block.t ~= "Para" then
             return nil
         end
@@ -84,70 +101,55 @@ local function cell_runs(cell)
 end
 
 
---- The position just past a code span that starts at `from`, or nil when no
--- run of exactly as many backticks closes it.
-local function code_span_end(text, from)
-    local width = #text:match("^(`+)", from)
-    local index = from + width
-    while true do
-        local candidate = text:find("`", index, true)
-        if candidate == nil then
-            return nil
+--- `|` and `\` in `Str` text cannot be left to the writer.  It drops a pipe
+-- that follows an odd run of backslashes, so `a\|b` loses its pipe before the
+-- text could be escaped; and it leaves a backslash before a letter alone,
+-- while the Markdown reader this project uses turns `\Word` into raw TeX that
+-- the HTML writer then drops, so `C:\Users\me` loses everything from the
+-- first backslash on.  Writing the two characters as raw inlines makes them
+-- unambiguous: `\|` is one pipe and `\\` is one backslash.  `Code` text and
+-- link destinations are left alone, because a reader keeps a pipe in a code
+-- span and the writer percent-encodes a pipe in a destination.
+local function protect_str(str)
+    local protected = {}
+    local segment = {}
+
+    local function flush()
+        if #segment > 0 then
+            table.insert(protected, pandoc.Str(table.concat(segment)))
+            segment = {}
         end
-        local closing = text:match("^(`+)", candidate)
-        if #closing == width then
-            return candidate + width
-        end
-        index = candidate + #closing
     end
+
+    for index = 1, #str.text do
+        local char = str.text:sub(index, index)
+        if char == "|" then
+            flush()
+            table.insert(protected, pandoc.RawInline("gfm", "\\|"))
+        elseif char == "\\" then
+            flush()
+            table.insert(protected, pandoc.RawInline("gfm", "\\\\"))
+        else
+            table.insert(segment, char)
+        end
+    end
+    flush()
+    return protected
 end
 
 
---- A bare `|` splits a cell, and the GFM writer escapes it in `Str` text only.
--- Escaping at the text level with a backslash count keeps `\|` and `\\\|`
--- and also escapes the pipe in a link title or in a link destination.  A pipe
--- inside a code span keeps no backslash: the Markdown reader this project uses
--- does not split a cell there, and escaping it would leave a visible `\`.
-local function escape_pipes(text)
-    local escaped = {}
-    local backslashes = 0
-    local index = 1
-    while index <= #text do
-        local char = text:sub(index, index)
-        if char == "`" and backslashes % 2 == 0 then
-            local closing = code_span_end(text, index)
-            if closing ~= nil then
-                table.insert(escaped, text:sub(index, closing - 1))
-                index = closing
-            else
-                local run = text:match("^(`+)", index)
-                table.insert(escaped, run)
-                index = index + #run
-            end
-            backslashes = 0
-        elseif char == "`" then
-            -- An escaped backtick is literal text, not a code span delimiter.
-            backslashes = 0
-            table.insert(escaped, char)
-            index = index + 1
-        elseif char == "|" then
-            if backslashes % 2 == 0 then
-                table.insert(escaped, "\\")
-            end
-            backslashes = 0
-            table.insert(escaped, char)
-            index = index + 1
-        elseif char == "\\" then
-            backslashes = backslashes + 1
-            table.insert(escaped, char)
-            index = index + 1
-        else
-            backslashes = 0
-            table.insert(escaped, char)
-            index = index + 1
-        end
+--- A link or image title is written between quotes on the row itself, so a
+-- line break there splits the row and a pipe there splits the cell.  Pandoc
+-- writes the title verbatim apart from its own quoting, so the title gets the
+-- same treatment as text: a line break becomes a space, then a backslash and
+-- a pipe are escaped.
+local function protect_title(title)
+    if title == nil then
+        return title
     end
-    return table.concat(escaped)
+    title = title:gsub("[\r\n\t]", " ")
+    title = title:gsub("\\", "\\\\")
+    return (title:gsub("|", "\\|"))
 end
 
 
@@ -161,15 +163,25 @@ local function gfm_run(inlines)
     local lifted = pandoc.Inlines(inlines):walk({
         LineBreak = function()
             return pandoc.RawInline("gfm", "<br>")
-        end
+        end,
+        Link = function(link)
+            link.title = protect_title(link.title)
+            return link
+        end,
+        Image = function(image)
+            image.title = protect_title(image.title)
+            return image
+        end,
+        Str = protect_str
     })
     local rendered = pandoc.write(pandoc.Pandoc({ pandoc.Plain(lifted) }), "gfm-raw_html", {
         wrap_text = "none"
     })
     rendered = rendered:gsub("^%s+", "")
     rendered = rendered:gsub("%s+$", "")
-    -- Pathological content, such as a link title with a newline, still writes a
-    -- second line.  Leave that table to Pandoc instead of splitting the row.
+    -- A backstop: with the titles sanitized above, nothing else is known to
+    -- write a second line, but a row that did split would be worse than
+    -- leaving the table to Pandoc.
     if rendered:find("\n", 1, true) then
         return nil
     end
@@ -190,7 +202,7 @@ local function gfm_cell(cell)
         end
         rendered[index] = run
     end
-    return escape_pipes(table.concat(rendered, "<br>"))
+    return table.concat(rendered, "<br>")
 end
 
 
@@ -262,13 +274,22 @@ local function table_row(row, columns)
 end
 
 
+local function empty_row(columns)
+    local cells = {}
+    for index = 1, columns do
+        cells[index] = ""
+    end
+    return "| " .. table.concat(cells, " | ") .. " |"
+end
+
+
 local function table_separator(tbl, header)
     local cells = {}
     for index, colspec in ipairs(tbl.colspecs) do
         -- The column spec is authoritative; a reader fills in the cell
         -- alignment only when that one cell carried the attribute.
         local alignment = colspec[1]
-        if alignment == pandoc.AlignDefault then
+        if alignment == pandoc.AlignDefault and header ~= nil then
             local cell = header.cells[index]
             if cell ~= nil then
                 alignment = cell.alignment
@@ -301,25 +322,30 @@ Table = function(elem)
         return elem
     end
     local columns = #elem.colspecs
-    if not table_is_rectangular(elem) or #elem.head.rows == 0 or columns == 0 then
+    if not table_is_rectangular(elem) or columns == 0 then
         return elem
     end
 
-    local header = table_row(elem.head.rows[1], columns)
-    if header == nil then
-        return elem
-    end
-    local lines = { header, table_separator(elem, elem.head.rows[1]) }
-
-    -- GFM has one header row.  Every other header row, including a row that
-    -- heads a table body, becomes an ordinary row so that no text is lost.
+    -- GFM has exactly one header row.  The head normally holds it, but a table
+    -- written without `<thead>` keeps its header cells in the body's head, so
+    -- take the first row of either and demote every other header row to a body
+    -- row so that no text is lost.
+    local header = nil
     local rows = {}
-    for index = 2, #elem.head.rows do
-        table.insert(rows, elem.head.rows[index])
+    for _, row in ipairs(elem.head.rows) do
+        if header == nil then
+            header = row
+        else
+            table.insert(rows, row)
+        end
     end
     for _, body in ipairs(elem.bodies) do
         for _, row in ipairs(body.head) do
-            table.insert(rows, row)
+            if header == nil then
+                header = row
+            else
+                table.insert(rows, row)
+            end
         end
         for _, row in ipairs(body.body) do
             table.insert(rows, row)
@@ -328,6 +354,18 @@ Table = function(elem)
     for _, row in ipairs(elem.foot.rows) do
         table.insert(rows, row)
     end
+    if header == nil and #rows == 0 then
+        return elem
+    end
+
+    local header_line = empty_row(columns)
+    if header ~= nil then
+        header_line = table_row(header, columns)
+        if header_line == nil then
+            return elem
+        end
+    end
+    local lines = { header_line, table_separator(elem, header) }
 
     for _, row in ipairs(rows) do
         local rendered = table_row(row, columns)
